@@ -1,0 +1,40 @@
+{
+  "name": "injective-m2-backend",
+  "version": "0.1.0",
+  "private": true,
+  "description": "M2 smart contracts on Injective EVM: ResultsRegistry, Predictions, LeagueBadge.",
+  "license": "UNLICENSED",
+  "type": "module",
+  "packageManager": "pnpm@10.27.0",
+  "scripts": {
+    "build": "hardhat build",
+    "build:prod": "hardhat build --build-profile production",
+    "test": "hardhat test",
+    "test:sol": "hardhat test solidity",
+    "test:ts": "hardhat test nodejs",
+    "coverage": "hardhat test --coverage",
+    "typecheck": "hardhat build && tsc --noEmit",
+    "vectors": "hardhat run scripts/gen-vectors.ts",
+    "export-abi": "hardhat build && hardhat run scripts/export-abi.ts",
+    "deploy:testnet": "hardhat ignition deploy ignition/modules/M2.ts --network injectiveTestnet --build-profile production --parameters ignition/parameters/testnet.json",
+    "node": "hardhat node",
+    "deploy:localhost": "hardhat ignition deploy ignition/modules/M2.ts --network localhost --parameters ignition/parameters/localhost.json --reset"
+  },
+  "devDependencies": {
+    "@nomicfoundation/hardhat-ignition": "^3.1.8",
+    "@nomicfoundation/hardhat-network-helpers": "^3.0.11",
+    "@nomicfoundation/hardhat-toolbox-viem": "^5.0.7",
+    "@nomicfoundation/hardhat-verify": "^3.1.0",
+    "@openzeppelin/contracts": "^5.6.1",
+    "@openzeppelin/merkle-tree": "^1.0.8",
+    "@types/node": "^22.20.4",
+    "dotenv": "^18.0.1",
+    "forge-std": "github:foundry-rs/forge-std#v1.9.4",
+    "hardhat": "^3.17.0",
+    "typescript": "~5.9.3",
+    "viem": "^2.56.8"
+  },
+  "engines": {
+    "node": ">=22.10"
+  }
+}

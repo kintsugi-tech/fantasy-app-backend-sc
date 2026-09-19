@@ -1,0 +1,117 @@
+{
+  "description": "M2 encoding vectors. Regenerate with `pnpm vectors`; never edit by hand.",
+  "domain": {
+    "name": "M2Predictions",
+    "version": "1",
+    "chainId": 1439,
+    "verifyingContract": "0x1111111111111111111111111111111111111111"
+  },
+  "league": {
+    "slug": "mbl-2026-27-main",
+    "leagueId": "0xe9912c4dc440f8241b3380d7c0d75fc2a20c30cd9931f5a7d91849d7c0cec5c1"
+  },
+  "round": {
+    "matchday": 7,
+    "roundId": "0x97e5740e62f4f2823790687d956fa10c821023aabb9386528e2d6194f25f75f1",
+    "canonicalGameIds": [
+      "mbl-2026-27-000101",
+      "mbl-2026-27-000102",
+      "mbl-2026-27-000103"
+    ],
+    "gameIds": [
+      "0xbb0c5875b6f55e53b40d469c3bf0cc48b56c7a9d4b75b184c7c0e611bee5de59",
+      "0xf0b07b8d525d5f2cd2781281b88a02f1df9ea3c8d2846e4ef0c3973833bae48c",
+      "0x91629ff26a7f26284a3252af2a1ec903f0f5fb0b7666e07df98227d7877b41f6"
+    ],
+    "gamesHash": "0x60bcdaad8d4d7afdd9854971c3040f44366ad899959bed057164c11b35e94582"
+  },
+  "teams": [
+    {
+      "home": "UB_BRONCOS",
+      "away": "ZAVKHAN_BROTHERS",
+      "homeCode": "0x55425f42524f4e434f5300000000000000000000000000000000000000000000",
+      "awayCode": "0x5a41564b48414e5f42524f544845525300000000000000000000000000000000"
+    },
+    {
+      "home": "KHASYN_KHULUGUUD",
+      "away": "DARKHAN_UNITED",
+      "homeCode": "0x4b484153594e5f4b48554c554755554400000000000000000000000000000000",
+      "awayCode": "0x4441524b48414e5f554e49544544000000000000000000000000000000000000"
+    },
+    {
+      "home": "ERDENET_MINERS",
+      "away": "SELENGE_BODONS",
+      "homeCode": "0x455244454e45545f4d494e455253000000000000000000000000000000000000",
+      "awayCode": "0x53454c454e47455f424f444f4e53000000000000000000000000000000000000"
+    }
+  ],
+  "submissions": [
+    {
+      "privateKeySeed": "m2-vector-user-0",
+      "user": "0x3d67e165c374DF796477c92fF9077de526e36287",
+      "picks": "0x010201",
+      "picksHash": "0xca1c6dc8435bd057b361809fee7a52ba6278202ecb4b1a46661779d6f6224377",
+      "confirmedAt": "1800000000",
+      "digest": "0xd5ec3995ce1c3fc09180661729a93394a9663e38d6e37f4fa38ffa7c1fea64ad",
+      "signature": "0x536d223221642d59a96afcf0ed0b9fe1ede12362ea9f5620a803f920d53f2b31683a7bfde93eb64b1043ba760a6870dcf233e4be644343933157a81627e399f31c"
+    },
+    {
+      "privateKeySeed": "m2-vector-user-1",
+      "user": "0xdDeA6B02788679d38e1601acDD426d94eEe8284D",
+      "picks": "0x020202",
+      "picksHash": "0x4e607b27ad2fa1780db6f90590bfd90b76f8f86e905309015d656bd1862a99db",
+      "confirmedAt": "1800003600",
+      "digest": "0xcccb6ef48fa5ab5180943e4b9ed8033fc9fbdfaa91d630d969a44529b2ee54f3",
+      "signature": "0x6c6dbd3c5231089f156bc1feb11057985cada09d329c6e8dc52ad236136c4c0c590a6c5a4549f385f46dd148b45654ba8d0fd7bc937488c21c9942ecdc2f24091c"
+    }
+  ],
+  "result": {
+    "csv": "spec_version,game_id,date,home,away,home_score,away_score,status,ot\nbb-1,000101,2026-11-14T19:00:00+08:00,UB_BRONCOS,ZAVKHAN_BROTHERS,88,80,final,0",
+    "sha256Base64": "/uDgHXqkMlODoluDPgU+qCb8mnDCpWHuMfZfByCvRx0=",
+    "sourceHash": "0xfee0e01d7aa4325383a25b833e053ea826fc9a70c2a561ee31f65f0720af471d"
+  },
+  "scoring": {
+    "outcomes": [
+      1,
+      0,
+      1
+    ],
+    "scores": [
+      {
+        "correct": 2,
+        "counted": 2
+      },
+      {
+        "correct": 0,
+        "counted": 2
+      }
+    ]
+  },
+  "standings": {
+    "root": "0xa1297892939747eede445d004633a4ef0c124b18a7cddc0f01608671132a5fd4",
+    "leaves": [
+      {
+        "account": "0x3d67e165c374DF796477c92fF9077de526e36287",
+        "rank": 1,
+        "points": 2,
+        "correct": 2,
+        "counted": 2,
+        "roundsPlayed": 1,
+        "proof": [
+          "0x9810330c686c00f542dfcf0e8561771276439dadfd7384e0b3d73a2d749e8d0f"
+        ]
+      },
+      {
+        "account": "0xdDeA6B02788679d38e1601acDD426d94eEe8284D",
+        "rank": 2,
+        "points": 0,
+        "correct": 0,
+        "counted": 2,
+        "roundsPlayed": 1,
+        "proof": [
+          "0x2af1e627e552188d96c20b116ec21ba739e95338a070140728f208d6102f33ba"
+        ]
+      }
+    ]
+  }
+}

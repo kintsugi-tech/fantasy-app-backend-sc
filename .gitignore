@@ -1,0 +1,16 @@
+/node_modules
+/dist
+/artifacts
+/cache
+/types
+/coverage
+/snapshots
+.gas-snapshot
+
+# Ignition keeps journals of real deployments: commit chain-1439 / chain-1776, never local chains.
+/ignition/deployments/chain-31337
+
+.env
+.env.*
+!.env.example
+.DS_Store
