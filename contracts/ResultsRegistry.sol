@@ -12,27 +12,24 @@ import {IResultsRegistry} from "./interfaces/IResultsRegistry.sol";
 ///
 ///         Lifecycle of a game:
 ///           registerGames (operator)  ->  Scheduled
-///           recordResults (relayer)   ->  Final | Forfeit | Void, correctable until `finalAt`
-///           correctResult (steward)   ->  replaces the result and restarts the finality delay
-///           voidGame (steward)        ->  Void, immediately final (only when no result arrived
-///                                         within `postponeWindow` after tip-off)
+///           recordResults (relayer)   ->  Final | Forfeit | Void, final as soon as it is written
+///           voidGame (steward)        ->  Void, final (only when no result arrived within
+///                                         `postponeWindow` after tip-off)
 ///
-///         Results come from LocalTruth attestations: the relayer verifies that the public file's
-///         SHA-256 equals the attested `sha256_pub` and stores it as `sourceHash`, so anyone can
-///         re-check a stored result against the attested file.
+///         Results come from LocalTruth attestations of an accredited institutional source: the
+///         relayer verifies that the public file's SHA-256 equals the attested `sha256_pub` and
+///         stores it as `sourceHash`, so anyone can re-check a stored result against the attested
+///         file. A recorded result never changes: there is no correction or challenge period.
 contract ResultsRegistry is IResultsRegistry, AccessControlDefaultAdminRules, Pausable {
     bytes32 public constant OPERATOR_ROLE = keccak256("OPERATOR_ROLE");
     bytes32 public constant RESULTS_RELAYER_ROLE = keccak256("RESULTS_RELAYER_ROLE");
     bytes32 public constant STEWARD_ROLE = keccak256("STEWARD_ROLE");
 
     uint256 public constant MAX_BATCH = 100;
-    uint64 public constant MAX_FINALITY_DELAY = 72 hours;
     uint64 public constant MIN_POSTPONE_WINDOW = 1 days;
     uint64 public constant MAX_POSTPONE_WINDOW = 30 days;
     uint256 public constant MAX_ATTESTATION_ID_LENGTH = 128;
 
-    /// @notice Delay after which a recorded result becomes final (default 12h).
-    uint64 public finalityDelay;
     /// @notice Time after tip-off before a game without a result may be voided (default 7 days).
     uint64 public postponeWindow;
 
@@ -43,9 +40,7 @@ contract ResultsRegistry is IResultsRegistry, AccessControlDefaultAdminRules, Pa
     error InvalidGameInfo(bytes32 gameId);
     error GameAlreadyRegistered(bytes32 gameId);
     error GameNotScheduled(bytes32 gameId);
-    error NoResult(bytes32 gameId);
     error ResultAlreadyRecorded(bytes32 gameId);
-    error ResultIsFinal(bytes32 gameId);
     error TeamsMismatch(bytes32 gameId);
     error InvalidResult(bytes32 gameId);
     error InvalidSource(bytes32 gameId);
@@ -63,32 +58,16 @@ contract ResultsRegistry is IResultsRegistry, AccessControlDefaultAdminRules, Pa
         uint16 awayScore,
         uint8 overtimes,
         bytes32 sourceHash,
-        string attestationId,
-        uint64 finalAt
-    );
-    event ResultCorrected(
-        bytes32 indexed gameId,
-        GameStatus status,
-        Side winner,
-        uint16 homeScore,
-        uint16 awayScore,
-        uint8 overtimes,
-        bytes32 sourceHash,
-        string attestationId,
-        uint64 finalAt,
-        string reason
+        string attestationId
     );
     event GameVoided(bytes32 indexed gameId, string reason);
-    event FinalityDelaySet(uint64 finalityDelay);
     event PostponeWindowSet(uint64 postponeWindow);
 
     constructor(
         uint48 adminDelay,
         address admin,
-        uint64 initialFinalityDelay,
         uint64 initialPostponeWindow
     ) AccessControlDefaultAdminRules(adminDelay, admin) {
-        _setFinalityDelay(initialFinalityDelay);
         _setPostponeWindow(initialPostponeWindow);
     }
 
@@ -145,7 +124,7 @@ contract ResultsRegistry is IResultsRegistry, AccessControlDefaultAdminRules, Pa
             Game storage g = _games[r.gameId];
             if (g.status != GameStatus.Scheduled) {
                 if (g.status == GameStatus.None) revert GameNotScheduled(r.gameId);
-                revert ResultAlreadyRecorded(r.gameId); // corrections go through the steward
+                revert ResultAlreadyRecorded(r.gameId); // a recorded result is final
             }
             _writeResult(g, r);
             emit ResultRecorded(
@@ -156,8 +135,7 @@ contract ResultsRegistry is IResultsRegistry, AccessControlDefaultAdminRules, Pa
                 r.awayScore,
                 r.overtimes,
                 r.sourceHash,
-                r.attestationId,
-                g.finalAt
+                r.attestationId
             );
         }
     }
@@ -166,28 +144,7 @@ contract ResultsRegistry is IResultsRegistry, AccessControlDefaultAdminRules, Pa
     // Steward: discretionary actions
     // ---------------------------------------------------------------------
 
-    /// @notice Replace a result that is not final yet (e.g. MSC attested a corrected file).
-    ///         Restarts the finality delay.
-    function correctResult(ResultInput calldata r, string calldata reason) external onlyRole(STEWARD_ROLE) {
-        Game storage g = _games[r.gameId];
-        if (g.recordedAt == 0) revert NoResult(r.gameId);
-        if (block.timestamp >= g.finalAt) revert ResultIsFinal(r.gameId);
-        _writeResult(g, r);
-        emit ResultCorrected(
-            r.gameId,
-            r.status,
-            r.winner,
-            r.homeScore,
-            r.awayScore,
-            r.overtimes,
-            r.sourceHash,
-            r.attestationId,
-            g.finalAt,
-            reason
-        );
-    }
-
-    /// @notice Void a game that got no result within `postponeWindow` after tip-off. Immediately final.
+    /// @notice Void a game that got no result within `postponeWindow` after tip-off. Final.
     function voidGame(bytes32 gameId, string calldata reason) external onlyRole(STEWARD_ROLE) {
         Game storage g = _games[gameId];
         if (g.status != GameStatus.Scheduled) revert GameNotScheduled(gameId);
@@ -197,18 +154,12 @@ contract ResultsRegistry is IResultsRegistry, AccessControlDefaultAdminRules, Pa
         g.status = GameStatus.Void;
         g.winner = Side.None;
         g.recordedAt = uint64(block.timestamp);
-        g.finalAt = uint64(block.timestamp);
         emit GameVoided(gameId, reason);
     }
 
     // ---------------------------------------------------------------------
     // Admin
     // ---------------------------------------------------------------------
-
-    /// @notice Only affects results recorded after the change: `finalAt` is fixed at write time.
-    function setFinalityDelay(uint64 delay) external onlyRole(DEFAULT_ADMIN_ROLE) {
-        _setFinalityDelay(delay);
-    }
 
     function setPostponeWindow(uint64 window) external onlyRole(DEFAULT_ADMIN_ROLE) {
         _setPostponeWindow(window);
@@ -230,9 +181,9 @@ contract ResultsRegistry is IResultsRegistry, AccessControlDefaultAdminRules, Pa
         return _games[gameId];
     }
 
+    /// @notice A game is final once it has a result (or was voided): results never change.
     function isFinal(bytes32 gameId) public view returns (bool) {
-        uint64 finalAt = _games[gameId].finalAt;
-        return finalAt != 0 && block.timestamp >= finalAt;
+        return _games[gameId].recordedAt != 0;
     }
 
     function outcomeOf(
@@ -265,7 +216,6 @@ contract ResultsRegistry is IResultsRegistry, AccessControlDefaultAdminRules, Pa
         g.sourceHash = r.sourceHash;
         g.attestationKey = keccak256(bytes(r.attestationId));
         g.recordedAt = uint64(block.timestamp);
-        g.finalAt = uint64(block.timestamp) + finalityDelay;
     }
 
     /// @dev Catches parser bugs: the stored result must be internally consistent.
@@ -291,12 +241,6 @@ contract ResultsRegistry is IResultsRegistry, AccessControlDefaultAdminRules, Pa
     function _checkBatch(uint256 size) private pure {
         if (size == 0) revert EmptyBatch();
         if (size > MAX_BATCH) revert BatchTooLarge(size, MAX_BATCH);
-    }
-
-    function _setFinalityDelay(uint64 delay) private {
-        if (delay > MAX_FINALITY_DELAY) revert DelayOutOfRange(delay);
-        finalityDelay = delay;
-        emit FinalityDelaySet(delay);
     }
 
     function _setPostponeWindow(uint64 window) private {

@@ -44,8 +44,7 @@ interface IResultsRegistry {
         bytes32 homeTeam;
         bytes32 awayTeam;
         uint64 tipOff;
-        uint64 recordedAt; // 0 while no result
-        uint64 finalAt; // result is final (no longer correctable) from this time on
+        uint64 recordedAt; // 0 while no result; once set, the result is final
         GameStatus status;
         Side winner;
         uint16 homeScore;
@@ -57,7 +56,7 @@ interface IResultsRegistry {
 
     function getGame(bytes32 gameId) external view returns (Game memory);
 
-    /// @notice Whether the game has a result (or was voided) that can no longer change.
+    /// @notice Whether the game has a result (or was voided). Results never change once recorded.
     function isFinal(bytes32 gameId) external view returns (bool);
 
     /// @notice Compact view used by Predictions to settle rounds.

@@ -18,30 +18,17 @@ import {
 import * as m2 from '../scripts/lib/m2.js'
 
 const HOUR = 3600
-const FINALITY = 12 * HOUR
 const POSTPONE = 7 * 24 * HOUR
-const CHALLENGE = 72 * HOUR
 
 describe('M2 season flow', async () => {
   const { viem, networkHelpers } = await network.create()
   const publicClient = await viem.getPublicClient()
-  const [admin, operator, resultsRelayer, submitter, steward, minter, anyone] = await viem.getWalletClients()
+  const [admin, operator, resultsRelayer, submitter, steward, anyone] = await viem.getWalletClients()
   const chainId = await publicClient.getChainId()
 
   async function deployM2() {
-    const registry = await viem.deployContract('ResultsRegistry', [
-      0,
-      admin.account.address,
-      BigInt(FINALITY),
-      BigInt(POSTPONE),
-    ])
-    const predictions = await viem.deployContract('Predictions', [
-      0,
-      admin.account.address,
-      registry.address,
-      BigInt(CHALLENGE),
-    ])
-    const badge = await viem.deployContract('LeagueBadge', [0, admin.account.address, predictions.address])
+    const registry = await viem.deployContract('ResultsRegistry', [0, admin.account.address, BigInt(POSTPONE)])
+    const predictions = await viem.deployContract('Predictions', [0, admin.account.address, registry.address])
 
     await registry.write.grantRole([await registry.read.OPERATOR_ROLE(), operator.account.address])
     await registry.write.grantRole([await registry.read.RESULTS_RELAYER_ROLE(), resultsRelayer.account.address])
@@ -49,9 +36,7 @@ describe('M2 season flow', async () => {
     await predictions.write.grantRole([await predictions.read.OPERATOR_ROLE(), operator.account.address])
     await predictions.write.grantRole([await predictions.read.SUBMITTER_ROLE(), submitter.account.address])
     await predictions.write.grantRole([await predictions.read.STEWARD_ROLE(), steward.account.address])
-    await badge.write.grantRole([await badge.read.MINTER_ROLE(), minter.account.address])
-    await badge.write.grantRole([await badge.read.OPERATOR_ROLE(), operator.account.address])
-    return { registry, predictions, badge }
+    return { registry, predictions }
   }
 
   /** Registers games, creates the league and schedules one round opening one hour ago. */
@@ -126,7 +111,7 @@ describe('M2 season flow', async () => {
     }
   })
 
-  it('runs a full league: fixtures, signed batch, results, scoring, standings, badges', async () => {
+  it('runs a full league: fixtures, signed batch, results, scoring, standings', async () => {
     const c = await deployM2()
     const { leagueId, roundId, games, gameIds, lockTime, now } = await setupRound(c, 'mbl-2026-27', 4)
     const gamesHash = m2.gamesHashOf(gameIds)
@@ -188,15 +173,16 @@ describe('M2 season flow', async () => {
         attestationId: `mbl_2026_game-${i}`,
       }
     })
-    await c.registry.write.recordResults([results], { account: resultsRelayer.account })
+    await c.registry.write.recordResults([results.slice(0, 3)], { account: resultsRelayer.account })
 
+    // A round settles only once every game has a result; results are final as soon as recorded.
     await viem.assertions.revertWithCustomErrorWithArgs(
       c.predictions.write.finalizeRound([roundId], { account: anyone.account }),
       c.predictions,
       'GameNotFinal',
-      [gameIds[0]],
+      [gameIds[3]],
     )
-    await networkHelpers.time.increase(FINALITY)
+    await c.registry.write.recordResults([results.slice(3)], { account: resultsRelayer.account })
     await c.predictions.write.finalizeRound([roundId], { account: anyone.account })
 
     // Scores from the chain equal the TS mirror of the scoring rules.
@@ -234,33 +220,27 @@ describe('M2 season flow', async () => {
       [leagueId, tree.root as Hex, ranked.length, keccak256(stringToHex(report)), 'https://m2.example/reports/mbl.json'],
       { account: steward.account },
     )
-    await c.badge.write.setLeagueDisplay([leagueId, 'Монгол Сагсан Бөмбөг', '2026-27'], { account: operator.account })
 
-    await networkHelpers.time.increase(CHALLENGE)
-    for (const [i, p] of ranked.entries()) {
-      await c.badge.write.claim(
-        [
-          leagueId,
-          p.account,
-          { rank: p.rank, points: p.points, correct: p.correct, counted: p.counted, roundsPlayed: p.roundsPlayed },
-          tree.getProof(i) as Hex[],
-        ],
-        { account: minter.account },
-      )
-    }
-
-    // The on-chain metadata is valid JSON with an SVG image.
-    const tokenId = await c.badge.read.tokenIdOf([leagueId, users[3].address])
-    assert.equal(await c.badge.read.ownerOf([tokenId]), users[3].address)
-    const uri = await c.badge.read.tokenURI([tokenId])
-    const metadata = JSON.parse(Buffer.from(uri.replace('data:application/json;base64,', ''), 'base64').toString('utf8'))
-    assert.equal(metadata.name, 'Монгол Сагсан Бөмбөг 2026-27 - #1')
-    const svg = Buffer.from(metadata.image.replace('data:image/svg+xml;base64,', ''), 'base64').toString('utf8')
-    assert.match(svg, /^<svg /)
-    assert.match(svg, />#1</)
-    assert.deepEqual(
-      metadata.attributes.find((a: { trait_type: string }) => a.trait_type === 'Points'),
-      { trait_type: 'Points', value: 4 },
+    // Anchored once: anyone can check a player's standing against the on-chain root.
+    const league = await c.predictions.read.getLeague([leagueId])
+    assert.equal(league.standingsRoot, tree.root)
+    const top = ranked[0]
+    assert.ok(
+      StandardMerkleTree.verify(
+        league.standingsRoot,
+        [...m2.STANDINGS_LEAF_ENCODING],
+        [leagueId, top.account, top.rank, top.points, top.correct, top.counted, top.roundsPlayed],
+        tree.getProof(0),
+      ),
+    )
+    await viem.assertions.revertWithCustomErrorWithArgs(
+      c.predictions.write.finalizeLeague(
+        [leagueId, tree.root as Hex, ranked.length, keccak256(stringToHex(report)), 'https://m2.example/reports/mbl.json'],
+        { account: steward.account },
+      ),
+      c.predictions,
+      'LeagueNotActive',
+      [leagueId],
     )
   })
 

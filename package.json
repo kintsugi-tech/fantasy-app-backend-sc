@@ -2,7 +2,7 @@
   "name": "injective-m2-backend",
   "version": "0.1.0",
   "private": true,
-  "description": "M2 smart contracts on Injective EVM: ResultsRegistry, Predictions, LeagueBadge.",
+  "description": "M2 smart contracts on Injective EVM: ResultsRegistry, Predictions.",
   "license": "UNLICENSED",
   "type": "module",
   "packageManager": "pnpm@10.27.0",

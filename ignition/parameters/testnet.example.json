@@ -1,13 +1,10 @@
 {
   "M2": {
     "adminDelay": 0,
-    "finalityDelay": "43200n",
     "postponeWindow": "604800n",
-    "challengeWindow": "259200n",
     "operator": "0x<worker operator key>",
     "resultsRelayer": "0x<worker results relayer key>",
     "submitter": "0x<worker submitter key>",
-    "minter": "0x<worker minter key>",
     "steward": "0x<steward browser wallet>"
   }
 }

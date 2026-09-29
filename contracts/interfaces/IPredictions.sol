@@ -2,7 +2,7 @@
 pragma solidity ^0.8.28;
 
 /// @title IPredictions
-/// @notice Read surface of the Predictions contract used by LeagueBadge and off-chain verifiers.
+/// @notice Read surface of the Predictions contract used by off-chain verifiers.
 interface IPredictions {
     struct League {
         bool exists;
@@ -10,7 +10,6 @@ interface IPredictions {
         uint16 roundCount;
         uint32 totalPlayers;
         uint64 finalizedAt;
-        uint64 claimsOpenAt;
         bytes32 metadataHash;
         bytes32 standingsRoot;
         bytes32 reportHash;

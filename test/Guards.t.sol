@@ -5,7 +5,6 @@ import {Pausable} from "@openzeppelin/contracts/utils/Pausable.sol";
 
 import {IPredictions} from "../contracts/interfaces/IPredictions.sol";
 import {IResultsRegistry} from "../contracts/interfaces/IResultsRegistry.sol";
-import {LeagueBadge} from "../contracts/LeagueBadge.sol";
 import {Predictions} from "../contracts/Predictions.sol";
 import {ResultsRegistry} from "../contracts/ResultsRegistry.sol";
 import {M2Base} from "./utils/M2Base.sol";
@@ -13,17 +12,11 @@ import {M2Base} from "./utils/M2Base.sol";
 /// @dev Constructor, state-machine and pause guards not exercised by the flow-oriented suites.
 contract GuardsTest is M2Base {
     function test_ConstructorGuards() public {
-        vm.expectRevert(abi.encodeWithSelector(ResultsRegistry.DelayOutOfRange.selector, uint64(73 hours)));
-        new ResultsRegistry(0, admin, 73 hours, POSTPONE);
+        vm.expectRevert(abi.encodeWithSelector(ResultsRegistry.DelayOutOfRange.selector, uint64(1 hours)));
+        new ResultsRegistry(0, admin, 1 hours);
 
         vm.expectRevert(Predictions.ZeroAddress.selector);
-        new Predictions(0, admin, ResultsRegistry(address(0)), CHALLENGE);
-
-        vm.expectRevert(abi.encodeWithSelector(Predictions.WindowOutOfRange.selector, uint64(8 days)));
-        new Predictions(0, admin, registry, 8 days);
-
-        vm.expectRevert(LeagueBadge.ZeroAddress.selector);
-        new LeagueBadge(0, admin, IPredictions(address(0)));
+        new Predictions(0, admin, ResultsRegistry(address(0)));
     }
 
     function test_CreateLeagueRejectsZeroId() public {
@@ -68,21 +61,18 @@ contract GuardsTest is M2Base {
         bytes32[] memory games = _registerGames(1, lock);
         bytes32 roundId = _scheduleRound(1, games, T0, lock);
 
-        vm.prank(steward);
-        vm.expectRevert(abi.encodeWithSelector(Predictions.LeagueNotActive.selector, LEAGUE));
-        predictions.replaceStandings(LEAGUE, keccak256("root"), 1, bytes32(0), "");
-
         vm.warp(lock + 3 hours);
         _record(_final(games[0], true));
-        vm.warp(block.timestamp + FINALITY);
         predictions.finalizeRound(roundId);
 
         vm.startPrank(steward);
+        vm.expectRevert(Predictions.InvalidStandings.selector);
+        predictions.finalizeLeague(LEAGUE, bytes32(0), 1, bytes32(0), "");
+        vm.expectRevert(Predictions.InvalidStandings.selector);
+        predictions.finalizeLeague(LEAGUE, keccak256("root"), 0, bytes32(0), "");
         predictions.finalizeLeague(LEAGUE, keccak256("root"), 1, bytes32(0), "");
         vm.expectRevert(abi.encodeWithSelector(Predictions.LeagueNotActive.selector, LEAGUE));
         predictions.finalizeLeague(LEAGUE, keccak256("root"), 1, bytes32(0), "");
-        vm.expectRevert(Predictions.InvalidStandings.selector);
-        predictions.replaceStandings(LEAGUE, keccak256("root"), 0, bytes32(0), "");
         vm.stopPrank();
     }
 
@@ -108,29 +98,18 @@ contract GuardsTest is M2Base {
     function test_PauseAndUnpause() public {
         vm.startPrank(admin);
         registry.pause();
-        registry.unpause();
         predictions.pause();
-        predictions.unpause();
-        badge.pause();
         vm.stopPrank();
 
-        vm.prank(minter);
-        vm.expectRevert(Pausable.EnforcedPause.selector);
-        badge.claim(LEAGUE, alice, LeagueBadge.BadgeStats(1, 0, 0, 0, 0), new bytes32[](0));
-
-        vm.prank(admin);
-        badge.unpause();
-        vm.prank(minter);
-        vm.expectRevert(LeagueBadge.ZeroAddress.selector);
-        badge.claim(LEAGUE, address(0), LeagueBadge.BadgeStats(1, 0, 0, 0, 0), new bytes32[](0));
-    }
-
-    function test_LeagueDisplayIsReadable() public {
         vm.prank(operator);
-        badge.setLeagueDisplay(LEAGUE, "MBL", "2026-27");
-        LeagueBadge.LeagueDisplay memory d = badge.getLeagueDisplay(LEAGUE);
-        assertEq(d.name, "MBL");
-        assertEq(d.season, "2026-27");
+        vm.expectRevert(Pausable.EnforcedPause.selector);
+        predictions.createLeague(LEAGUE, bytes32(0));
+
+        vm.startPrank(admin);
+        registry.unpause();
+        predictions.unpause();
+        vm.stopPrank();
+        _createLeague();
     }
 
     function test_GameViewsForUnknownGame() public view {

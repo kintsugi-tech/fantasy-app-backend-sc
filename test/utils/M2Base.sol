@@ -4,23 +4,20 @@ pragma solidity ^0.8.28;
 import {Test} from "forge-std/Test.sol";
 
 import {IResultsRegistry} from "../../contracts/interfaces/IResultsRegistry.sol";
-import {LeagueBadge} from "../../contracts/LeagueBadge.sol";
 import {Predictions} from "../../contracts/Predictions.sol";
 import {ResultsRegistry} from "../../contracts/ResultsRegistry.sol";
 
-/// @dev Deploys the three contracts with separate role holders and offers helpers for fixtures,
+/// @dev Deploys both contracts with separate role holders and offers helpers for fixtures,
 ///      results and signed submissions.
 abstract contract M2Base is Test {
     ResultsRegistry internal registry;
     Predictions internal predictions;
-    LeagueBadge internal badge;
 
     address internal admin = makeAddr("admin");
     address internal operator = makeAddr("operator");
     address internal resultsRelayer = makeAddr("resultsRelayer");
     address internal submitter = makeAddr("submitter");
     address internal steward = makeAddr("steward");
-    address internal minter = makeAddr("minter");
     address internal stranger = makeAddr("stranger");
 
     address internal alice;
@@ -30,9 +27,7 @@ abstract contract M2Base is Test {
     address internal carol;
     uint256 internal carolKey;
 
-    uint64 internal constant FINALITY = 12 hours;
     uint64 internal constant POSTPONE = 7 days;
-    uint64 internal constant CHALLENGE = 72 hours;
     uint64 internal constant T0 = 1_800_000_000;
 
     bytes32 internal constant LEAGUE = keccak256("mbl-2026-27-main");
@@ -41,9 +36,8 @@ abstract contract M2Base is Test {
 
     function setUp() public virtual {
         vm.warp(T0);
-        registry = new ResultsRegistry(0, admin, FINALITY, POSTPONE);
-        predictions = new Predictions(0, admin, registry, CHALLENGE);
-        badge = new LeagueBadge(0, admin, predictions);
+        registry = new ResultsRegistry(0, admin, POSTPONE);
+        predictions = new Predictions(0, admin, registry);
 
         vm.startPrank(admin);
         registry.grantRole(registry.OPERATOR_ROLE(), operator);
@@ -52,8 +46,6 @@ abstract contract M2Base is Test {
         predictions.grantRole(predictions.OPERATOR_ROLE(), operator);
         predictions.grantRole(predictions.SUBMITTER_ROLE(), submitter);
         predictions.grantRole(predictions.STEWARD_ROLE(), steward);
-        badge.grantRole(badge.MINTER_ROLE(), minter);
-        badge.grantRole(badge.OPERATOR_ROLE(), operator);
         vm.stopPrank();
 
         (alice, aliceKey) = makeAddrAndKey("alice");
@@ -141,13 +133,12 @@ abstract contract M2Base is Test {
         registry.recordResults(batch);
     }
 
-    /// @dev Records final results for all games (true = home wins) and waits for finality.
+    /// @dev Records final results for all games (true = home wins); they are final right away.
     function _settleGames(bytes32[] memory ids, bool[] memory homeWins) internal {
         IResultsRegistry.ResultInput[] memory batch = new IResultsRegistry.ResultInput[](ids.length);
         for (uint256 i = 0; i < ids.length; ++i) batch[i] = _final(ids[i], homeWins[i]);
         vm.prank(resultsRelayer);
         registry.recordResults(batch);
-        vm.warp(block.timestamp + FINALITY);
     }
 
     // --- predictions -------------------------------------------------------

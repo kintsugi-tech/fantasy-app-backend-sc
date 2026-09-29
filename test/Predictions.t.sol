@@ -355,17 +355,16 @@ contract PredictionsTest is M2Base {
         predictions.finalizeRound(roundId);
 
         vm.warp(lockTime + 3 hours);
-        IResultsRegistry.ResultInput[] memory batch = new IResultsRegistry.ResultInput[](3);
+        IResultsRegistry.ResultInput[] memory batch = new IResultsRegistry.ResultInput[](2);
         batch[0] = _final(games[0], true);
         batch[1] = _final(games[1], false);
-        batch[2] = _final(games[2], true);
         vm.prank(resultsRelayer);
         registry.recordResults(batch);
 
-        vm.expectRevert(abi.encodeWithSelector(Predictions.GameNotFinal.selector, games[0]));
+        vm.expectRevert(abi.encodeWithSelector(Predictions.GameNotFinal.selector, games[2]));
         predictions.finalizeRound(roundId);
 
-        vm.warp(block.timestamp + FINALITY);
+        _record(_final(games[2], true)); // final right away: no waiting period
         vm.expectEmit(address(predictions));
         emit Predictions.RoundFinalized(roundId, uint64(1 | (2 << 2) | (1 << 4)), 3);
         vm.prank(stranger); // permissionless
@@ -390,7 +389,6 @@ contract PredictionsTest is M2Base {
         _record(_final(games[0], true));
         _record(_result(games[1], IResultsRegistry.GameStatus.Void, IResultsRegistry.Side.None, 0, 0));
         _record(_final(games[2], true));
-        vm.warp(block.timestamp + FINALITY);
 
         predictions.finalizeRound(roundId);
         assertEq(predictions.getRound(roundId).outcomes, 1);
@@ -403,7 +401,6 @@ contract PredictionsTest is M2Base {
         _record(_result(games[0], IResultsRegistry.GameStatus.Forfeit, IResultsRegistry.Side.Away, 0, 20));
         _record(_final(games[1], false));
         _record(_final(games[2], true));
-        vm.warp(block.timestamp + FINALITY);
         predictions.finalizeRound(roundId);
         _assertScore(alice, 2, 3);
     }
@@ -448,7 +445,7 @@ contract PredictionsTest is M2Base {
         for (uint256 i = 0; i < 3; ++i) {
             _record(_result(g3[i], IResultsRegistry.GameStatus.Void, IResultsRegistry.Side.None, 0, 0));
         }
-        vm.warp(lockTime + 4 days + FINALITY);
+        vm.warp(lockTime + 4 days);
         predictions.finalizeRound(round3);
 
         IPredictions.LeagueStats memory s = predictions.leagueStatsOf(LEAGUE, alice);
@@ -463,7 +460,7 @@ contract PredictionsTest is M2Base {
         assertEq(b.roundsPlayed, 1);
     }
 
-    function test_FinalizeLeagueAndChallengeWindow() public {
+    function test_FinalizeLeagueIsWriteOnce() public {
         bytes32 root = keccak256("root");
         vm.prank(steward);
         vm.expectRevert(abi.encodeWithSelector(Predictions.RoundsPending.selector, LEAGUE));
@@ -484,7 +481,8 @@ contract PredictionsTest is M2Base {
         assertTrue(l.finalized);
         assertEq(l.standingsRoot, root);
         assertEq(l.totalPlayers, 10);
-        assertEq(l.claimsOpenAt, block.timestamp + CHALLENGE);
+        assertEq(l.reportHash, keccak256("report"));
+        assertEq(l.finalizedAt, block.timestamp);
 
         // No more rounds once finalized.
         bytes32[] memory more = _registerGames(1, uint64(block.timestamp) + 1 days);
@@ -496,18 +494,12 @@ contract PredictionsTest is M2Base {
             abi.encodeWithSelector(Predictions.LeagueNotActive.selector, LEAGUE)
         );
 
-        // Standings can be replaced during the window, which restarts it.
+        // The standings are anchored once: no second finalization, no replacement.
         vm.warp(block.timestamp + 1 days);
         vm.prank(steward);
-        predictions.replaceStandings(LEAGUE, keccak256("root2"), 11, keccak256("report2"), "ipfs://report2");
-        l = predictions.getLeague(LEAGUE);
-        assertEq(l.standingsRoot, keccak256("root2"));
-        assertEq(l.claimsOpenAt, block.timestamp + CHALLENGE);
-
-        vm.warp(l.claimsOpenAt);
-        vm.prank(steward);
-        vm.expectRevert(abi.encodeWithSelector(Predictions.ChallengeWindowClosed.selector, LEAGUE));
-        predictions.replaceStandings(LEAGUE, keccak256("root3"), 11, keccak256("report3"), "ipfs://report3");
+        vm.expectRevert(abi.encodeWithSelector(Predictions.LeagueNotActive.selector, LEAGUE));
+        predictions.finalizeLeague(LEAGUE, keccak256("root2"), 11, keccak256("report2"), "ipfs://report2");
+        assertEq(predictions.getLeague(LEAGUE).standingsRoot, root);
     }
 
     function test_FinalizeLeagueNeedsAFinalizedRound() public {
@@ -572,7 +564,6 @@ contract PredictionsTest is M2Base {
             ++expectedCounted;
             if (uint8(picks[i]) == (homeWins[i] ? H : A)) ++expectedCorrect;
         }
-        vm.warp(block.timestamp + FINALITY);
         predictions.finalizeRound(roundId);
         _assertScore(alice, expectedCorrect, expectedCounted);
     }

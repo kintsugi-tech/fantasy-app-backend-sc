@@ -103,8 +103,7 @@ contract ResultsRegistryTest is M2Base {
             91,
             0,
             r.sourceHash,
-            r.attestationId,
-            uint64(block.timestamp) + FINALITY
+            r.attestationId
         );
         _record(r);
 
@@ -114,12 +113,7 @@ contract ResultsRegistryTest is M2Base {
         assertEq(g.sourceHash, r.sourceHash);
         assertEq(g.attestationKey, keccak256(bytes(r.attestationId)));
         assertEq(g.recordedAt, block.timestamp);
-
-        assertFalse(registry.isFinal(game));
-        vm.warp(block.timestamp + FINALITY - 1);
-        assertFalse(registry.isFinal(game));
-        vm.warp(block.timestamp + 1);
-        assertTrue(registry.isFinal(game));
+        assertTrue(registry.isFinal(game)); // final as soon as it is written
     }
 
     function test_RecordOvertimeResult() public {
@@ -206,9 +200,12 @@ contract ResultsRegistryTest is M2Base {
     function test_RecordIsWriteOnce() public {
         vm.warp(tipOff + 2 hours);
         _record(_final(game, true));
+        vm.warp(block.timestamp + 30 days);
         IResultsRegistry.ResultInput memory again = _final(game, false);
+        again.attestationId = "mbl_2026_game-0001-v2";
         vm.expectRevert(abi.encodeWithSelector(ResultsRegistry.ResultAlreadyRecorded.selector, game));
         this.recordAsRelayer(again);
+        assertEq(uint8(registry.getGame(game).winner), uint8(IResultsRegistry.Side.Home));
     }
 
     function test_RecordRejectsUnknownGame() public {
@@ -238,50 +235,6 @@ contract ResultsRegistryTest is M2Base {
         registry.recordResults(batch);
     }
 
-    // --- correctResult ---------------------------------------------------------
-
-    function test_CorrectResultRestartsFinality() public {
-        vm.warp(tipOff + 2 hours);
-        _record(_final(game, true));
-        vm.warp(block.timestamp + 6 hours);
-
-        IResultsRegistry.ResultInput memory corrected = _final(game, false);
-        corrected.attestationId = "mbl_2026_game-0001-v2";
-        vm.prank(steward);
-        registry.correctResult(corrected, "MSC re-uploaded with the correct score");
-
-        IResultsRegistry.Game memory g = registry.getGame(game);
-        assertEq(uint8(g.winner), uint8(IResultsRegistry.Side.Away));
-        assertEq(g.finalAt, block.timestamp + FINALITY);
-        assertEq(g.attestationKey, keccak256("mbl_2026_game-0001-v2"));
-    }
-
-    function test_CorrectResultRejectedOnceFinal() public {
-        vm.warp(tipOff + 2 hours);
-        _record(_final(game, true));
-        vm.warp(block.timestamp + FINALITY);
-        IResultsRegistry.ResultInput memory corrected = _final(game, false);
-        vm.prank(steward);
-        vm.expectRevert(abi.encodeWithSelector(ResultsRegistry.ResultIsFinal.selector, game));
-        registry.correctResult(corrected, "too late");
-    }
-
-    function test_CorrectResultNeedsResultAndSteward() public {
-        IResultsRegistry.ResultInput memory corrected = _final(game, false);
-        vm.prank(steward);
-        vm.expectRevert(abi.encodeWithSelector(ResultsRegistry.NoResult.selector, game));
-        registry.correctResult(corrected, "nothing to correct");
-
-        vm.warp(tipOff + 2 hours);
-        _record(_final(game, true));
-        bytes32 role = registry.STEWARD_ROLE();
-        vm.prank(resultsRelayer);
-        vm.expectRevert(
-            abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, resultsRelayer, role)
-        );
-        registry.correctResult(corrected, "relayer cannot correct");
-    }
-
     // --- voidGame --------------------------------------------------------------
 
     function test_VoidAfterPostponeWindow() public {
@@ -299,6 +252,16 @@ contract ResultsRegistryTest is M2Base {
         assertTrue(registry.isFinal(game));
     }
 
+    function test_VoidOnlySteward() public {
+        vm.warp(tipOff + POSTPONE + 1);
+        bytes32 role = registry.STEWARD_ROLE();
+        vm.prank(resultsRelayer);
+        vm.expectRevert(
+            abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, resultsRelayer, role)
+        );
+        registry.voidGame(game, "relayer cannot void");
+    }
+
     function test_VoidRejectedWhenResultExists() public {
         vm.warp(tipOff + 2 hours);
         _record(_final(game, true));
@@ -310,28 +273,15 @@ contract ResultsRegistryTest is M2Base {
 
     // --- admin -----------------------------------------------------------------
 
-    function test_FinalityDelayChangeKeepsExistingFinalAt() public {
-        vm.warp(tipOff + 2 hours);
-        _record(_final(game, true));
-        uint64 finalAt = registry.getGame(game).finalAt;
-
-        vm.prank(admin);
-        registry.setFinalityDelay(72 hours);
-        assertEq(registry.getGame(game).finalAt, finalAt);
-        assertEq(registry.finalityDelay(), 72 hours);
-    }
-
     function test_AdminParameterBounds() public {
         vm.startPrank(admin);
-        vm.expectRevert(abi.encodeWithSelector(ResultsRegistry.DelayOutOfRange.selector, uint64(72 hours + 1)));
-        registry.setFinalityDelay(72 hours + 1);
         vm.expectRevert(abi.encodeWithSelector(ResultsRegistry.DelayOutOfRange.selector, uint64(1 hours)));
         registry.setPostponeWindow(1 hours);
         vm.expectRevert(abi.encodeWithSelector(ResultsRegistry.DelayOutOfRange.selector, uint64(31 days)));
         registry.setPostponeWindow(31 days);
-        registry.setFinalityDelay(0);
+        registry.setPostponeWindow(2 days);
         vm.stopPrank();
-        assertEq(registry.finalityDelay(), 0);
+        assertEq(registry.postponeWindow(), 2 days);
     }
 
     // --- helpers ---------------------------------------------------------------

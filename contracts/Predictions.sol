@@ -18,8 +18,8 @@ import {PicksLib} from "./libraries/PicksLib.sol";
 ///           with the user's (custodial) key and our relayer submits it, paying the gas.
 ///         - Picks are stored in clear, so the layer-0 score of any user is recomputable on-chain
 ///           (`scoreOf`, `leagueStatsOf`) from these picks and the ResultsRegistry outcomes.
-///         - Final standings are anchored as a Merkle root (`finalizeLeague`) after the last round,
-///           with a challenge window before badges can be claimed.
+///         - Final standings are anchored once, as a Merkle root (`finalizeLeague`), after the
+///           last round.
 contract Predictions is IPredictions, AccessControlDefaultAdminRules, Pausable, EIP712 {
     bytes32 public constant OPERATOR_ROLE = keccak256("OPERATOR_ROLE");
     bytes32 public constant SUBMITTER_ROLE = keccak256("SUBMITTER_ROLE");
@@ -32,11 +32,8 @@ contract Predictions is IPredictions, AccessControlDefaultAdminRules, Pausable, 
     uint256 public constant MAX_ROUNDS_PER_LEAGUE = 64;
     uint256 public constant MAX_BATCH = 100;
     uint64 public constant MAX_CLOCK_SKEW = 60;
-    uint64 public constant MAX_CHALLENGE_WINDOW = 7 days;
 
     IResultsRegistry public immutable registry;
-    /// @notice Time between finalizeLeague / replaceStandings and the opening of badge claims.
-    uint64 public immutable challengeWindow;
 
     enum RoundState {
         None,
@@ -105,11 +102,9 @@ contract Predictions is IPredictions, AccessControlDefaultAdminRules, Pausable, 
     error GameNotFinal(bytes32 gameId);
     error RoundsPending(bytes32 leagueId);
     error InvalidStandings();
-    error ChallengeWindowClosed(bytes32 leagueId);
     error EmptyBatch();
     error BatchTooLarge(uint256 size, uint256 max);
     error SubmissionRejected(address user, SubmitStatus status);
-    error WindowOutOfRange(uint64 value);
 
     event LeagueCreated(bytes32 indexed leagueId, bytes32 metadataHash);
     event RoundScheduled(
@@ -137,28 +132,16 @@ contract Predictions is IPredictions, AccessControlDefaultAdminRules, Pausable, 
         bytes32 standingsRoot,
         uint32 totalPlayers,
         bytes32 reportHash,
-        string reportURI,
-        uint64 claimsOpenAt
-    );
-    event StandingsReplaced(
-        bytes32 indexed leagueId,
-        bytes32 standingsRoot,
-        uint32 totalPlayers,
-        bytes32 reportHash,
-        string reportURI,
-        uint64 claimsOpenAt
+        string reportURI
     );
 
     constructor(
         uint48 adminDelay,
         address admin,
-        IResultsRegistry registry_,
-        uint64 challengeWindow_
+        IResultsRegistry registry_
     ) AccessControlDefaultAdminRules(adminDelay, admin) EIP712("M2Predictions", "1") {
         if (address(registry_) == address(0)) revert ZeroAddress();
-        if (challengeWindow_ > MAX_CHALLENGE_WINDOW) revert WindowOutOfRange(challengeWindow_);
         registry = registry_;
-        challengeWindow = challengeWindow_;
     }
 
     // ---------------------------------------------------------------------
@@ -318,7 +301,7 @@ contract Predictions is IPredictions, AccessControlDefaultAdminRules, Pausable, 
         emit RoundCancelled(roundId, reason);
     }
 
-    /// @notice Anchor the final standings once every round is finalized or cancelled.
+    /// @notice Anchor the final standings once every round is finalized or cancelled. Write-once.
     /// @param standingsRoot OZ StandardMerkleTree root, leaves
     ///        (bytes32 leagueId, address account, uint32 rank, uint32 points, uint32 correct,
     ///         uint32 counted, uint16 roundsPlayed)
@@ -345,26 +328,10 @@ contract Predictions is IPredictions, AccessControlDefaultAdminRules, Pausable, 
 
         l.finalized = true;
         l.finalizedAt = uint64(block.timestamp);
-        _setStandings(l, standingsRoot, totalPlayers, reportHash);
-        emit LeagueFinalized(leagueId, standingsRoot, totalPlayers, reportHash, reportURI, l.claimsOpenAt);
-    }
-
-    /// @notice Fix the standings during the challenge window (e.g. an off-chain scoring bug).
-    ///         Restarts the window.
-    function replaceStandings(
-        bytes32 leagueId,
-        bytes32 standingsRoot,
-        uint32 totalPlayers,
-        bytes32 reportHash,
-        string calldata reportURI
-    ) external onlyRole(STEWARD_ROLE) {
-        League storage l = _leagues[leagueId];
-        if (!l.finalized) revert LeagueNotActive(leagueId);
-        if (block.timestamp >= l.claimsOpenAt) revert ChallengeWindowClosed(leagueId);
-        if (standingsRoot == bytes32(0) || totalPlayers == 0) revert InvalidStandings();
-
-        _setStandings(l, standingsRoot, totalPlayers, reportHash);
-        emit StandingsReplaced(leagueId, standingsRoot, totalPlayers, reportHash, reportURI, l.claimsOpenAt);
+        l.standingsRoot = standingsRoot;
+        l.totalPlayers = totalPlayers;
+        l.reportHash = reportHash;
+        emit LeagueFinalized(leagueId, standingsRoot, totalPlayers, reportHash, reportURI);
     }
 
     // ---------------------------------------------------------------------
@@ -523,12 +490,5 @@ contract Predictions is IPredictions, AccessControlDefaultAdminRules, Pausable, 
 
     function _picksHash(bytes32 roundId, bytes32 gamesHash, bytes calldata picks) private pure returns (bytes32) {
         return keccak256(abi.encode(roundId, gamesHash, keccak256(picks)));
-    }
-
-    function _setStandings(League storage l, bytes32 root, uint32 totalPlayers, bytes32 reportHash) private {
-        l.standingsRoot = root;
-        l.totalPlayers = totalPlayers;
-        l.reportHash = reportHash;
-        l.claimsOpenAt = uint64(block.timestamp) + challengeWindow;
     }
 }

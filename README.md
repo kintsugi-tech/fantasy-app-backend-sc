@@ -6,9 +6,8 @@ lives in `injective-m2-frontend`.
 
 | Contract | Role |
 |---|---|
-| `ResultsRegistry` | Per-game fixtures and results. Results come from LocalTruth attestations (CosmWasm); `sourceHash` is the attested file's SHA-256. |
-| `Predictions` | Leagues, rounds (matchdays), users' signed predictions, round settlement, on-chain layer-0 scoring, final standings root. |
-| `LeagueBadge` | Soulbound ERC-721 (ERC-5192) with a player's final standing, fully on-chain metadata. |
+| `ResultsRegistry` | Per-game fixtures and results. Results come from LocalTruth attestations (CosmWasm); `sourceHash` is the attested file's SHA-256. A recorded result is final. |
+| `Predictions` | Leagues, rounds (matchdays), users' signed predictions, round settlement, on-chain layer-0 scoring, final standings root (anchored once). |
 
 ## How it works
 
@@ -17,11 +16,10 @@ operator:  registerGames ─▶ createLeague ─▶ scheduleRound(leagueId, matc
 user:      "Confirm" in the app ─▶ worker signs EIP-712 Submission with the user's custodial key
 submitter: submitForBatch(roundId, items)            (≤ 100 per tx, ~40k gas each; we pay the gas)
 relayer:   recordResults(...)                        (after verifying the LocalTruth attestation)
-             └─ result final after finalityDelay (12h default); steward can correctResult before that
-anyone:    finalizeRound(roundId)                    (once every game is final: snapshots outcomes)
+             └─ final as soon as it is written: no correction, no challenge period
+anyone:    finalizeRound(roundId)                    (once every game has a result: snapshots outcomes)
 anyone:    scoreOf / leagueStatsOf                   (layer-0 score recomputed on-chain)
-steward:   finalizeLeague(root, ...)                 (Merkle root of the standings, 72h challenge window)
-minter:    LeagueBadge.claim(leagueId, account, stats, proof)
+steward:   finalizeLeague(root, ...)                 (Merkle root of the final standings, write-once)
 ```
 
 Key rules:
@@ -35,6 +33,12 @@ Key rules:
   contract; it is the receipt the app shows.
 - A game counts in a round only if it was `Final`/`Forfeit` and did not tip off before the lock.
 - Home/away teams are registered with the fixture; `recordResults` rejects a swapped file.
+- **Results are final when recorded.** They come from an accredited institutional source (MSC,
+  attested on LocalTruth), so there is no correction or challenge period: the first attested
+  result of a game is the one that counts. The accepted risk is a relayer bug (e.g. a row matched
+  to the wrong game) that the on-chain checks do not catch; the only remedy then is `pause`.
+- A game with no result `postponeWindow` (7 days) after tip-off can be voided by the steward, so a
+  round is never blocked by a game that is never played nor uploaded.
 - Tie-break (off-chain, from on-chain data): points → rounds played → average lead time before the
   lock (`sumLeadTime / roundsPlayed`) → verifiable draw.
 
@@ -42,12 +46,11 @@ Key rules:
 
 | Role | Holder | Can |
 |---|---|---|
-| `DEFAULT_ADMIN_ROLE` | cold wallet (2-step transfer with delay) | roles, pause, `setFinalityDelay`, `setPostponeWindow` |
-| `STEWARD_ROLE` | a person, signing from the admin panel | `correctResult`, `voidGame`, `cancelRound`, `finalizeLeague`, `replaceStandings` |
-| `OPERATOR_ROLE` | worker key | fixtures, leagues, rounds, lock updates, badge display text |
+| `DEFAULT_ADMIN_ROLE` | cold wallet (2-step transfer with delay) | roles, pause, `setPostponeWindow` |
+| `STEWARD_ROLE` | a person, signing from the admin panel | `voidGame`, `cancelRound`, `finalizeLeague` |
+| `OPERATOR_ROLE` | worker key | fixtures, leagues, rounds, lock updates |
 | `RESULTS_RELAYER_ROLE` | worker key | `recordResults` |
 | `SUBMITTER_ROLE` | worker key | `submitFor`, `submitForBatch` |
-| `MINTER_ROLE` | worker key | `LeagueBadge.claim` |
 
 Use one key per queue to avoid nonce contention.
 
@@ -101,3 +104,6 @@ then reports deploys as dropped.
 3. `beginDefaultAdminTransfer(coldWallet)` on each contract, then
    `acceptDefaultAdminTransfer()` from the cold wallet after the delay.
 4. Fund the worker keys with INJ, run `pnpm export-abi`, commit `ignition/deployments/chain-1776`.
+
+Players' custodial wallets never need INJ (our relayers pay every transaction). If one ever does,
+send it manually from our treasury wallet; there is no faucet.

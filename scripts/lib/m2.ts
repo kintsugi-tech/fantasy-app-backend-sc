@@ -112,7 +112,7 @@ export const unpackOutcomes = (packed: bigint, gameCount: number): number[] =>
 
 // --- standings --------------------------------------------------------------------------------
 
-/** OZ StandardMerkleTree leaf encoding of the final standings (LeagueBadge.leafOf). */
+/** OZ StandardMerkleTree leaf encoding of the final standings (root in Predictions.finalizeLeague). */
 export const STANDINGS_LEAF_ENCODING = [
   'bytes32', // leagueId
   'address', // account
