@@ -4,6 +4,8 @@ pragma solidity ^0.8.28;
 import {MerkleProof} from "@openzeppelin/contracts/utils/cryptography/MerkleProof.sol";
 import {Test} from "forge-std/Test.sol";
 
+import {IPredictions} from "../contracts/interfaces/IPredictions.sol";
+
 /// @dev Recomputes every value in test/vectors/m2-vectors.json (generated with viem by
 ///      scripts/gen-vectors.ts) using the exact Solidity encodings the contracts use.
 contract VectorsTest is Test {
@@ -88,21 +90,18 @@ contract VectorsTest is Test {
         bytes32 root = vm.parseJsonBytes32(json, ".standings.root");
         for (uint256 i = 0; i < 2; ++i) {
             string memory base = string.concat(".standings.leaves[", vm.toString(i), "]");
-            bytes32 leaf = keccak256(
-                bytes.concat(
-                    keccak256(
-                        abi.encode(
-                            leagueId,
-                            vm.parseJsonAddress(json, string.concat(base, ".account")),
-                            uint32(vm.parseJsonUint(json, string.concat(base, ".rank"))),
-                            uint32(vm.parseJsonUint(json, string.concat(base, ".points"))),
-                            uint32(vm.parseJsonUint(json, string.concat(base, ".correct"))),
-                            uint32(vm.parseJsonUint(json, string.concat(base, ".counted"))),
-                            uint16(vm.parseJsonUint(json, string.concat(base, ".roundsPlayed")))
-                        )
-                    )
-                )
-            );
+            IPredictions.StandingLeaf memory row = IPredictions.StandingLeaf({
+                leagueId: leagueId,
+                account: vm.parseJsonAddress(json, string.concat(base, ".account")),
+                rank: uint32(vm.parseJsonUint(json, string.concat(base, ".rank"))),
+                points: uint32(vm.parseJsonUint(json, string.concat(base, ".points"))),
+                correct: uint32(vm.parseJsonUint(json, string.concat(base, ".correct"))),
+                counted: uint32(vm.parseJsonUint(json, string.concat(base, ".counted"))),
+                roundsPlayed: uint16(vm.parseJsonUint(json, string.concat(base, ".roundsPlayed"))),
+                sumLeadTime: uint64(vm.parseUint(vm.parseJsonString(json, string.concat(base, ".sumLeadTime"))))
+            });
+            // Same leaf hash as Predictions.checkStanding.
+            bytes32 leaf = keccak256(bytes.concat(keccak256(abi.encode(row))));
             bytes32[] memory proof = vm.parseJsonBytes32Array(json, string.concat(base, ".proof"));
             assertTrue(MerkleProof.verify(proof, root, leaf));
         }

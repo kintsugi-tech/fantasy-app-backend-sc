@@ -3,48 +3,53 @@ pragma solidity ^0.8.28;
 
 import {Test} from "forge-std/Test.sol";
 
+import {IPredictions} from "../contracts/interfaces/IPredictions.sol";
 import {IResultsRegistry} from "../contracts/interfaces/IResultsRegistry.sol";
 import {Predictions} from "../contracts/Predictions.sol";
 import {ResultsRegistry} from "../contracts/ResultsRegistry.sol";
 import {M2Base} from "./utils/M2Base.sol";
 
-/// @dev Drives random sequences of submissions (valid or not), time jumps, results and
-///      finalization against a single 3-game round.
+/// @dev Drives random sequences against one league of 3 rounds of 3 games: submissions (valid or
+///      not, with confirmedAt up to MAX_CLOCK_SKEW ahead), time jumps, game moves, lock moves,
+///      results (Final or Void, game by game), cancellations and finalization. The combinations of
+///      these, not each function alone, are what the invariants check.
 contract PredictionsHandler is Test {
+    uint256 internal constant GAMES = 3;
+
     Predictions internal immutable predictions;
     ResultsRegistry internal immutable registry;
+    address internal immutable operator;
     address internal immutable submitter;
     address internal immutable resultsRelayer;
-    bytes32 internal immutable roundId;
-    uint64 internal immutable opensAt;
-    uint64 internal immutable lockTime;
+    address internal immutable steward;
 
-    bytes32[] internal games;
+    bytes32[] public roundIds;
+    mapping(bytes32 roundId => bytes32[]) internal _games;
     address[] public users;
     uint256[] internal keys;
 
-    mapping(address => bytes) public storedPicks;
-    mapping(address => uint64) public storedConfirmedAt;
-    uint256 public accepted;
-    bool public resultsRecorded;
+    mapping(bytes32 roundId => mapping(address user => bytes)) public storedPicks;
+    mapping(bytes32 roundId => mapping(address user => uint64)) public storedConfirmedAt;
+    mapping(bytes32 roundId => uint256) public accepted;
+    mapping(bytes32 roundId => uint64) public outcomesAtFinalization;
+    /// A game seen tipping off at or after its round's lock once the round was locked: it was
+    /// played after picks closed, so it must count.
+    mapping(bytes32 gameId => bool) public lockedIn;
 
     constructor(
         Predictions predictions_,
         ResultsRegistry registry_,
-        address submitter_,
-        address resultsRelayer_,
-        bytes32 roundId_,
-        bytes32[] memory games_
+        address[4] memory roles, // operator, submitter, results relayer, steward
+        bytes32[] memory roundIds_,
+        bytes32[][] memory games_
     ) {
         predictions = predictions_;
         registry = registry_;
-        submitter = submitter_;
-        resultsRelayer = resultsRelayer_;
-        roundId = roundId_;
-        games = games_;
-        Predictions.Round memory r = predictions_.getRound(roundId_);
-        opensAt = r.opensAt;
-        lockTime = r.lockTime;
+        (operator, submitter, resultsRelayer, steward) = (roles[0], roles[1], roles[2], roles[3]);
+        for (uint256 r = 0; r < roundIds_.length; ++r) {
+            roundIds.push(roundIds_[r]);
+            _games[roundIds_[r]] = games_[r];
+        }
         for (uint256 i = 0; i < 5; ++i) {
             (address user, uint256 key) = makeAddrAndKey(string.concat("player", vm.toString(i)));
             users.push(user);
@@ -56,45 +61,91 @@ contract PredictionsHandler is Test {
         return users.length;
     }
 
-    function submit(uint256 userSeed, uint8 pickBits, uint32 age, bool wrongKey) external {
-        if (block.timestamp >= lockTime) return;
+    function roundsLength() external view returns (uint256) {
+        return roundIds.length;
+    }
+
+    function gameOf(bytes32 roundId, uint256 i) external view returns (bytes32) {
+        return _games[roundId][i];
+    }
+
+    // --- actions ---------------------------------------------------------------------------
+
+    function submit(uint256 userSeed, uint256 roundSeed, uint8 pickBits, uint32 age, bool wrongKey) external {
+        bytes32 roundId = _round(roundSeed);
+        if (!predictions.isRoundOpen(roundId)) return;
+        Predictions.Round memory r = predictions.getRound(roundId);
         uint256 u = userSeed % users.length;
         address user = users[u];
 
-        bytes memory picks = new bytes(3);
-        for (uint256 i = 0; i < 3; ++i) picks[i] = bytes1((pickBits >> i) & 1 == 1 ? uint8(1) : uint8(2));
-        uint64 confirmedAt = uint64(block.timestamp) - uint64(age % 1 hours);
-        if (confirmedAt < opensAt) confirmedAt = opensAt;
+        bytes memory picks = new bytes(GAMES);
+        for (uint256 i = 0; i < GAMES; ++i) picks[i] = bytes1((pickBits >> i) & 1 == 1 ? uint8(1) : uint8(2));
+        // From one hour ago up to MAX_CLOCK_SKEW ahead, inside [opensAt, lockTime).
+        uint64 confirmedAt = uint64(block.timestamp) + 60 - uint64(age % (1 hours + 61));
+        if (confirmedAt < r.opensAt) confirmedAt = r.opensAt;
+        if (confirmedAt >= r.lockTime) confirmedAt = r.lockTime - 1;
 
         bytes32 picksHash = predictions.computePicksHash(roundId, picks);
         bytes32 digest = predictions.submissionDigest(user, roundId, picksHash, confirmedAt);
-        (uint8 v, bytes32 r, bytes32 s) = vm.sign(wrongKey ? keys[(u + 1) % keys.length] : keys[u], digest);
+        (uint8 v, bytes32 rs, bytes32 s) = vm.sign(wrongKey ? keys[(u + 1) % keys.length] : keys[u], digest);
 
         Predictions.BatchItem[] memory items = new Predictions.BatchItem[](1);
-        items[0] = Predictions.BatchItem(user, picksHash, picks, confirmedAt, abi.encodePacked(r, s, v));
+        items[0] = Predictions.BatchItem(user, picksHash, picks, confirmedAt, abi.encodePacked(rs, s, v));
         vm.prank(submitter);
         Predictions.SubmitStatus[] memory statuses = predictions.submitForBatch(roundId, items);
 
         if (statuses[0] == Predictions.SubmitStatus.Ok) {
-            storedPicks[user] = picks;
-            storedConfirmedAt[user] = confirmedAt;
-            ++accepted;
+            storedPicks[roundId][user] = picks;
+            storedConfirmedAt[roundId][user] = confirmedAt;
+            ++accepted[roundId];
         }
     }
 
     function advance(uint32 dt) external {
-        vm.warp(block.timestamp + (dt % 12 hours));
+        vm.warp(block.timestamp + (dt % 2 days));
     }
 
-    function recordResults(uint8 winBits, uint8 voidBits) external {
-        if (resultsRecorded || block.timestamp < lockTime) return;
-        IResultsRegistry.ResultInput[] memory batch = new IResultsRegistry.ResultInput[](3);
-        for (uint256 i = 0; i < 3; ++i) {
-            IResultsRegistry.Game memory g = registry.getGame(games[i]);
+    /// The operator moves a game without a result anywhere from 1 day ago to 2 days ahead. Moves
+    /// to the past must be rejected (C1); a rejected call rolls back `lockedIn` too.
+    function rescheduleGame(uint256 roundSeed, uint256 gameSeed, uint32 offset) external {
+        bytes32 roundId = _round(roundSeed);
+        bytes32 gameId = _games[roundId][gameSeed % GAMES];
+        IResultsRegistry.Game memory g = registry.getGame(gameId);
+        if (g.status != IResultsRegistry.GameStatus.Scheduled) return;
+        uint64 lockTime = predictions.getRound(roundId).lockTime;
+        if (block.timestamp >= lockTime && g.tipOff >= lockTime) lockedIn[gameId] = true;
+        vm.prank(operator);
+        registry.rescheduleGame(gameId, uint64(block.timestamp) - 1 days + uint64(offset % 3 days));
+    }
+
+    /// The operator moves the lock of an open round to any future time not after its games,
+    /// within MAX_CLOCK_SKEW too: those moves must be rejected (C5).
+    function updateRoundLock(uint256 roundSeed, uint32 offset) external {
+        bytes32 roundId = _round(roundSeed);
+        Predictions.Round memory r = predictions.getRound(roundId);
+        if (r.state != Predictions.RoundState.Scheduled || block.timestamp >= r.lockTime) return;
+        uint64 newLock = uint64(block.timestamp) + 1 + uint64(offset % 1 days);
+        for (uint256 i = 0; i < GAMES; ++i) {
+            uint64 tipOff = registry.getGame(_games[roundId][i]).tipOff;
+            if (tipOff < newLock) newLock = tipOff;
+        }
+        if (newLock <= block.timestamp || newLock <= r.opensAt) return;
+        vm.prank(operator);
+        predictions.updateRoundLock(roundId, newLock);
+    }
+
+    /// The relayer records every game of a round that has tipped off (bit i of voidBits: void).
+    function recordResults(uint256 roundSeed, uint8 winBits, uint8 voidBits) external {
+        bytes32 roundId = _round(roundSeed);
+        for (uint256 i = 0; i < GAMES; ++i) {
+            bytes32 gameId = _games[roundId][i];
+            IResultsRegistry.Game memory g = registry.getGame(gameId);
+            if (g.status != IResultsRegistry.GameStatus.Scheduled || block.timestamp < g.tipOff) continue;
             bool isVoid = (voidBits >> i) & 1 == 1;
             bool homeWins = (winBits >> i) & 1 == 1;
-            batch[i] = IResultsRegistry.ResultInput({
-                gameId: games[i],
+            IResultsRegistry.ResultInput[] memory batch = new IResultsRegistry.ResultInput[](1);
+            batch[0] = IResultsRegistry.ResultInput({
+                gameId: gameId,
                 homeTeam: g.homeTeam,
                 awayTeam: g.awayTeam,
                 status: isVoid ? IResultsRegistry.GameStatus.Void : IResultsRegistry.GameStatus.Final,
@@ -102,65 +153,136 @@ contract PredictionsHandler is Test {
                 homeScore: isVoid ? 0 : (homeWins ? 90 : 80),
                 awayScore: isVoid ? 0 : (homeWins ? 80 : 90),
                 overtimes: 0,
-                sourceHash: keccak256(abi.encode(i)),
+                sourceHash: keccak256(abi.encode(gameId)),
                 attestationId: "invariant"
             });
+            vm.prank(resultsRelayer);
+            registry.recordResults(batch);
         }
-        vm.prank(resultsRelayer);
-        registry.recordResults(batch);
-        resultsRecorded = true;
     }
 
-    function finalize() external {
-        if (!resultsRecorded) return;
-        for (uint256 i = 0; i < 3; ++i) if (!registry.isFinal(games[i])) return;
+    /// Rare on purpose, so that most runs also reach finalization.
+    function cancelRound(uint256 roundSeed, uint8 chance) external {
+        if (chance % 8 != 0) return;
+        bytes32 roundId = _round(roundSeed);
         if (predictions.getRound(roundId).state != Predictions.RoundState.Scheduled) return;
-        predictions.finalizeRound(roundId);
+        vm.prank(steward);
+        predictions.cancelRound(roundId, "invariant");
+    }
+
+    /// Anyone settles every round that is ready.
+    function finalize() external {
+        for (uint256 r = 0; r < roundIds.length; ++r) {
+            bytes32 roundId = roundIds[r];
+            uint64 readyAt = predictions.finalizableAt(roundId);
+            if (readyAt == 0 || block.timestamp < readyAt) continue;
+            predictions.finalizeRound(roundId);
+            outcomesAtFinalization[roundId] = predictions.getRound(roundId).outcomes;
+        }
+    }
+
+    function _round(uint256 seed) internal view returns (bytes32) {
+        return roundIds[seed % roundIds.length];
     }
 }
 
 contract PredictionsInvariantTest is M2Base {
     PredictionsHandler internal handler;
-    bytes32 internal roundId;
-    uint64 internal lockTime;
 
     function setUp() public override {
         super.setUp();
         _createLeague();
-        lockTime = T0 + 1 days;
-        bytes32[] memory games = _registerGames(3, lockTime);
-        roundId = _scheduleRound(1, games, T0, lockTime);
-
-        handler = new PredictionsHandler(predictions, registry, submitter, resultsRelayer, roundId, games);
+        bytes32[] memory roundIds = new bytes32[](3);
+        bytes32[][] memory games = new bytes32[][](3);
+        for (uint256 r = 0; r < 3; ++r) {
+            uint64 lock = T0 + uint64(r + 1) * 1 days;
+            games[r] = _registerGames(3, lock);
+            roundIds[r] = _scheduleRound(uint16(r + 1), games[r], T0, lock);
+        }
+        handler = new PredictionsHandler(
+            predictions,
+            registry,
+            [operator, submitter, resultsRelayer, steward],
+            roundIds,
+            games
+        );
         targetContract(address(handler));
+        bytes4[] memory actions = new bytes4[](7);
+        actions[0] = PredictionsHandler.submit.selector;
+        actions[1] = PredictionsHandler.advance.selector;
+        actions[2] = PredictionsHandler.rescheduleGame.selector;
+        actions[3] = PredictionsHandler.updateRoundLock.selector;
+        actions[4] = PredictionsHandler.recordResults.selector;
+        actions[5] = PredictionsHandler.cancelRound.selector;
+        actions[6] = PredictionsHandler.finalize.selector;
+        targetSelector(FuzzSelector({addr: address(handler), selectors: actions})); // not the getters
     }
 
-    /// Stored predictions never change and always match what was accepted.
+    /// Stored predictions never change, match what was accepted, and stay before the round's lock
+    /// even after the lock moved (the C5 property).
     function invariant_EntriesAreImmutable() public view {
-        for (uint256 i = 0; i < handler.usersLength(); ++i) {
-            address user = handler.users(i);
-            (uint64 confirmedAt, uint64 submittedAt, bytes memory picks) = predictions.getEntry(roundId, user);
-            assertEq(picks, handler.storedPicks(user));
-            assertEq(confirmedAt, handler.storedConfirmedAt(user));
-            if (submittedAt != 0) {
-                assertLt(submittedAt, lockTime, "stored after lock");
-                assertLt(confirmedAt, lockTime, "confirmed after lock");
+        for (uint256 r = 0; r < handler.roundsLength(); ++r) {
+            bytes32 roundId = handler.roundIds(r);
+            uint64 lockTime = predictions.getRound(roundId).lockTime;
+            for (uint256 i = 0; i < handler.usersLength(); ++i) {
+                address user = handler.users(i);
+                (uint64 confirmedAt, uint64 submittedAt, bytes memory picks) = predictions.getEntry(roundId, user);
+                assertEq(picks, handler.storedPicks(roundId, user));
+                assertEq(confirmedAt, handler.storedConfirmedAt(roundId, user));
+                if (submittedAt != 0) {
+                    assertLt(submittedAt, lockTime, "stored after lock");
+                    assertLt(confirmedAt, lockTime, "confirmed after lock");
+                }
             }
         }
     }
 
-    /// One submission per user: the counter equals the number of accepted items.
+    /// One submission per user per round: each counter equals the accepted items.
     function invariant_OneSubmissionPerUser() public view {
-        assertEq(predictions.getRound(roundId).submissions, handler.accepted());
-        assertLe(handler.accepted(), handler.usersLength());
+        for (uint256 r = 0; r < handler.roundsLength(); ++r) {
+            bytes32 roundId = handler.roundIds(r);
+            assertEq(predictions.getRound(roundId).submissions, handler.accepted(roundId));
+            assertLe(handler.accepted(roundId), handler.usersLength());
+        }
     }
 
     /// Layer-0 scores are bounded.
     function invariant_ScoresAreBounded() public view {
+        for (uint256 r = 0; r < handler.roundsLength(); ++r) {
+            for (uint256 i = 0; i < handler.usersLength(); ++i) {
+                (uint8 correct, uint8 counted) = predictions.scoreOf(handler.roundIds(r), handler.users(i));
+                assertLe(correct, counted);
+                assertLe(counted, 3);
+            }
+        }
+    }
+
+    /// leagueStatsOf never reverts, whatever moved, and its totals are consistent.
+    function invariant_LeagueStatsAlwaysComputable() public view {
         for (uint256 i = 0; i < handler.usersLength(); ++i) {
-            (uint8 correct, uint8 counted) = predictions.scoreOf(roundId, handler.users(i));
-            assertLe(correct, counted);
-            assertLe(counted, 3);
+            IPredictions.LeagueStats memory s = predictions.leagueStatsOf(LEAGUE, handler.users(i));
+            assertEq(s.points, s.correct);
+            assertLe(s.correct, s.counted);
+            assertLe(s.roundsPlayed, handler.roundsLength());
+        }
+    }
+
+    /// A finalized round's outcomes never change, and a game counts if and only if it was played
+    /// or forfeited and started at or after the lock (the C1 property).
+    function invariant_OnlyGamesStartedAfterTheLockCount() public view {
+        for (uint256 r = 0; r < handler.roundsLength(); ++r) {
+            bytes32 roundId = handler.roundIds(r);
+            Predictions.Round memory round = predictions.getRound(roundId);
+            if (round.state != Predictions.RoundState.Finalized) continue;
+            assertEq(round.outcomes, handler.outcomesAtFinalization(roundId));
+            for (uint256 i = 0; i < 3; ++i) {
+                IResultsRegistry.Game memory g = registry.getGame(handler.gameOf(roundId, i));
+                bool played = g.status == IResultsRegistry.GameStatus.Final ||
+                    g.status == IResultsRegistry.GameStatus.Forfeit;
+                bool counted = (round.outcomes >> (2 * i)) & 3 != 0;
+                assertEq(counted, played && g.tipOff >= round.lockTime);
+                if (played && handler.lockedIn(handler.gameOf(roundId, i))) assertTrue(counted, "played after lock");
+            }
         }
     }
 }

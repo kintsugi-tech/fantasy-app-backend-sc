@@ -112,7 +112,10 @@ export const unpackOutcomes = (packed: bigint, gameCount: number): number[] =>
 
 // --- standings --------------------------------------------------------------------------------
 
-/** OZ StandardMerkleTree leaf encoding of the final standings (root in Predictions.finalizeLeague). */
+/**
+ * OZ StandardMerkleTree leaf encoding of the final standings (IPredictions.StandingLeaf; root in
+ * Predictions.proposeStandings, then finalizeLeague). Predictions.checkStanding verifies a row.
+ */
 export const STANDINGS_LEAF_ENCODING = [
   'bytes32', // leagueId
   'address', // account
@@ -121,7 +124,23 @@ export const STANDINGS_LEAF_ENCODING = [
   'uint32', // correct
   'uint32', // counted
   'uint16', // roundsPlayed
+  'uint64', // sumLeadTime: the third tie-break
 ] as const
+
+/** A ranked player as a standings leaf, in STANDINGS_LEAF_ENCODING order. */
+export const standingLeafOf = (
+  leagueId: Hex,
+  p: PlayerStats & { rank: number },
+): [Hex, Address, number, number, number, number, number, bigint] => [
+  leagueId,
+  p.account,
+  p.rank,
+  p.points,
+  p.correct,
+  p.counted,
+  p.roundsPlayed,
+  p.sumLeadTime,
+]
 
 export type PlayerStats = {
   account: Address

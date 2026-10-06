@@ -4,6 +4,7 @@ pragma solidity ^0.8.28;
 import {AccessControlDefaultAdminRules} from "@openzeppelin/contracts/access/extensions/AccessControlDefaultAdminRules.sol";
 import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 import {EIP712} from "@openzeppelin/contracts/utils/cryptography/EIP712.sol";
+import {MerkleProof} from "@openzeppelin/contracts/utils/cryptography/MerkleProof.sol";
 import {Pausable} from "@openzeppelin/contracts/utils/Pausable.sol";
 
 import {IPredictions} from "./interfaces/IPredictions.sol";
@@ -18,8 +19,13 @@ import {PicksLib} from "./libraries/PicksLib.sol";
 ///           with the user's (custodial) key and our relayer submits it, paying the gas.
 ///         - Picks are stored in clear, so the layer-0 score of any user is recomputable on-chain
 ///           (`scoreOf`, `leagueStatsOf`) from these picks and the ResultsRegistry outcomes.
-///         - Final standings are anchored once, as a Merkle root (`finalizeLeague`), after the
-///           last round.
+///         - A round settles `finalizationDelay` after its last result: results are final when
+///           recorded, and in that window the steward can still cancel a round built on a wrong one.
+///         - Final standings, a Merkle root, are proposed by the steward after the last round
+///           (`proposeStandings`, replaceable) and anchored once 48 h later (`finalizeLeague`).
+///           Anyone can check a row against them and against the chain (`checkStanding`).
+///         - Pause: the steward stops everything but `cancelRound` in minutes; only the admin
+///           (cold wallet) resumes.
 contract Predictions is IPredictions, AccessControlDefaultAdminRules, Pausable, EIP712 {
     bytes32 public constant OPERATOR_ROLE = keccak256("OPERATOR_ROLE");
     bytes32 public constant SUBMITTER_ROLE = keccak256("SUBMITTER_ROLE");
@@ -32,8 +38,14 @@ contract Predictions is IPredictions, AccessControlDefaultAdminRules, Pausable, 
     uint256 public constant MAX_ROUNDS_PER_LEAGUE = 64;
     uint256 public constant MAX_BATCH = 100;
     uint64 public constant MAX_CLOCK_SKEW = 60;
+    uint64 public constant MIN_FINALIZATION_DELAY = 1 hours;
+    uint64 public constant MAX_FINALIZATION_DELAY = 7 days;
+    uint64 public constant STANDINGS_REVIEW_PERIOD = 48 hours;
 
     IResultsRegistry public immutable registry;
+
+    /// @notice Time after a round's last recorded result before it can be finalized (default 24 h).
+    uint64 public finalizationDelay;
 
     enum RoundState {
         None,
@@ -83,6 +95,7 @@ contract Predictions is IPredictions, AccessControlDefaultAdminRules, Pausable, 
     mapping(bytes32 roundId => Round) private _rounds;
     mapping(bytes32 roundId => bytes32[]) private _roundGames;
     mapping(bytes32 roundId => mapping(address user => Entry)) private _entries;
+    mapping(bytes32 leagueId => StandingsProposal) private _proposals;
 
     error ZeroAddress();
     error InvalidLeague(bytes32 leagueId);
@@ -100,8 +113,13 @@ contract Predictions is IPredictions, AccessControlDefaultAdminRules, Pausable, 
     error RoundLocked(bytes32 roundId);
     error RoundNotLocked(bytes32 roundId);
     error GameNotFinal(bytes32 gameId);
+    error FinalizationPending(bytes32 roundId, uint64 finalizableAt);
+    error DelayOutOfRange(uint64 value);
     error RoundsPending(bytes32 leagueId);
     error InvalidStandings();
+    error NoStandingsProposal(bytes32 leagueId);
+    error ReviewPeriodOpen(bytes32 leagueId, uint64 finalizableAt);
+    error StandingsOutdated(bytes32 leagueId);
     error EmptyBatch();
     error BatchTooLarge(uint256 size, uint256 max);
     error SubmissionRejected(address user, SubmitStatus status);
@@ -127,21 +145,38 @@ contract Predictions is IPredictions, AccessControlDefaultAdminRules, Pausable, 
     );
     event SubmissionSkipped(bytes32 indexed roundId, address indexed user, SubmitStatus status);
     event RoundFinalized(bytes32 indexed roundId, uint64 outcomes, uint8 countedGames);
-    event LeagueFinalized(
+    event FinalizationDelaySet(uint64 finalizationDelay);
+    event StandingsProposed(
         bytes32 indexed leagueId,
         bytes32 standingsRoot,
         uint32 totalPlayers,
         bytes32 reportHash,
-        string reportURI
+        string reportURI,
+        uint64 finalizableAt
     );
+    event LeagueFinalized(bytes32 indexed leagueId, bytes32 standingsRoot, uint32 totalPlayers, bytes32 reportHash);
 
+    /// @dev Every role holder is set here, so the deployer gets no role: any account can deploy.
     constructor(
         uint48 adminDelay,
         address admin,
-        IResultsRegistry registry_
+        IResultsRegistry registry_,
+        address operator,
+        address submitter,
+        address steward,
+        uint64 initialFinalizationDelay
     ) AccessControlDefaultAdminRules(adminDelay, admin) EIP712("M2Predictions", "1") {
-        if (address(registry_) == address(0)) revert ZeroAddress();
+        if (
+            address(registry_) == address(0) ||
+            operator == address(0) ||
+            submitter == address(0) ||
+            steward == address(0)
+        ) revert ZeroAddress();
         registry = registry_;
+        _grantRole(OPERATOR_ROLE, operator);
+        _grantRole(SUBMITTER_ROLE, submitter);
+        _grantRole(STEWARD_ROLE, steward);
+        _setFinalizationDelay(initialFinalizationDelay);
     }
 
     // ---------------------------------------------------------------------
@@ -183,9 +218,10 @@ contract Predictions is IPredictions, AccessControlDefaultAdminRules, Pausable, 
             for (uint256 j = 0; j < i; ++j) {
                 if (gameIds[j] == gameId) revert DuplicateGame(gameId);
             }
-            IResultsRegistry.Game memory g = registry.getGame(gameId);
-            if (g.status != IResultsRegistry.GameStatus.Scheduled) revert GameNotSchedulable(gameId);
-            if (g.tipOff < lockTime) revert LockAfterTipOff(gameId);
+            // slither-disable-next-line unused-return (winner and recordedAt are not needed here)
+            (IResultsRegistry.GameStatus status, , uint64 tipOff, ) = registry.outcomeOf(gameId);
+            if (status != IResultsRegistry.GameStatus.Scheduled) revert GameNotSchedulable(gameId);
+            if (tipOff < lockTime) revert LockAfterTipOff(gameId);
         }
 
         bytes32 gamesHash = keccak256(abi.encodePacked(gameIds));
@@ -208,15 +244,19 @@ contract Predictions is IPredictions, AccessControlDefaultAdminRules, Pausable, 
     }
 
     /// @notice Move the lock of a round that has not locked yet (e.g. a game was moved earlier).
+    ///         The new lock is more than MAX_CLOCK_SKEW ahead, so it stays after every stored
+    ///         `confirmedAt` (at most the block time + MAX_CLOCK_SKEW when it was accepted).
     function updateRoundLock(bytes32 roundId, uint64 newLockTime) external onlyRole(OPERATOR_ROLE) whenNotPaused {
         Round storage r = _rounds[roundId];
         if (r.state != RoundState.Scheduled) revert RoundNotActive(roundId);
         if (block.timestamp >= r.lockTime) revert RoundLocked(roundId);
-        if (newLockTime <= block.timestamp || newLockTime <= r.opensAt) revert InvalidSchedule();
+        if (newLockTime <= block.timestamp + MAX_CLOCK_SKEW || newLockTime <= r.opensAt) revert InvalidSchedule();
 
         bytes32[] storage gameIds = _roundGames[roundId];
         for (uint256 i = 0; i < gameIds.length; ++i) {
-            if (registry.getGame(gameIds[i]).tipOff < newLockTime) revert LockAfterTipOff(gameIds[i]);
+            // slither-disable-next-line unused-return (only the tip-off is needed here)
+            (, , uint64 tipOff, ) = registry.outcomeOf(gameIds[i]);
+            if (tipOff < newLockTime) revert LockAfterTipOff(gameIds[i]);
         }
 
         uint64 old = r.lockTime;
@@ -266,34 +306,29 @@ contract Predictions is IPredictions, AccessControlDefaultAdminRules, Pausable, 
     // ---------------------------------------------------------------------
 
     /// @notice Snapshot the outcomes of a locked round once all its games are final in the
-    ///         ResultsRegistry. Permissionless: it is deterministic.
-    /// @dev A game counts only if it was played or forfeited and did not start before the lock.
+    ///         ResultsRegistry and `finalizationDelay` has passed since the last of them was
+    ///         recorded. Permissionless: it is deterministic.
     function finalizeRound(bytes32 roundId) external whenNotPaused {
         Round storage r = _rounds[roundId];
         if (r.state != RoundState.Scheduled) revert RoundNotActive(roundId);
         if (block.timestamp < r.lockTime) revert RoundNotLocked(roundId);
 
-        bytes32[] storage gameIds = _roundGames[roundId];
-        uint64 outcomes;
-        uint64 lockTime = r.lockTime;
-        for (uint256 i = 0; i < gameIds.length; ++i) {
-            (bool final_, IResultsRegistry.GameStatus status, IResultsRegistry.Side winner, uint64 tipOff) = registry
-                .outcomeOf(gameIds[i]);
-            if (!final_) revert GameNotFinal(gameIds[i]);
-            bool counts = (status == IResultsRegistry.GameStatus.Final ||
-                status == IResultsRegistry.GameStatus.Forfeit) && tipOff >= lockTime;
-            if (counts) outcomes |= uint64(uint8(winner)) << uint8(2 * i); // i < MAX_GAMES
-        }
+        (uint64 outcomes, uint64 lastRecordedAt, bytes32 pending) = _outcomes(roundId, r.lockTime);
+        if (pending != bytes32(0)) revert GameNotFinal(pending);
+        uint64 readyAt = lastRecordedAt + finalizationDelay;
+        if (block.timestamp < readyAt) revert FinalizationPending(roundId, readyAt);
 
         r.outcomes = outcomes;
         r.state = RoundState.Finalized;
-        emit RoundFinalized(roundId, outcomes, PicksLib.countedGames(outcomes, gameIds.length));
+        emit RoundFinalized(roundId, outcomes, PicksLib.countedGames(outcomes, r.gameCount));
     }
 
     // ---------------------------------------------------------------------
     // Steward
     // ---------------------------------------------------------------------
 
+    /// @notice Works while paused: pausing, cancelling the round, then unpausing is the remedy for
+    ///         a round built on a wrong result.
     function cancelRound(bytes32 roundId, string calldata reason) external onlyRole(STEWARD_ROLE) {
         Round storage r = _rounds[roundId];
         if (r.state != RoundState.Scheduled) revert RoundNotActive(roundId);
@@ -301,24 +336,26 @@ contract Predictions is IPredictions, AccessControlDefaultAdminRules, Pausable, 
         emit RoundCancelled(roundId, reason);
     }
 
-    /// @notice Anchor the final standings once every round is finalized or cancelled. Write-once.
-    /// @param standingsRoot OZ StandardMerkleTree root, leaves
+    /// @notice Propose the final standings once every round is finalized or cancelled. They are
+    ///         public for STANDINGS_REVIEW_PERIOD before finalizeLeague can anchor them; a new
+    ///         proposal replaces the previous one and restarts the period.
+    /// @param standingsRoot OZ StandardMerkleTree root of StandingLeaf rows
     ///        (bytes32 leagueId, address account, uint32 rank, uint32 points, uint32 correct,
-    ///         uint32 counted, uint16 roundsPlayed)
+    ///         uint32 counted, uint16 roundsPlayed, uint64 sumLeadTime)
     /// @param reportHash hash of the published report (tree dump + standings) at `reportURI`
-    function finalizeLeague(
+    function proposeStandings(
         bytes32 leagueId,
         bytes32 standingsRoot,
         uint32 totalPlayers,
         bytes32 reportHash,
         string calldata reportURI
-    ) external onlyRole(STEWARD_ROLE) {
+    ) external onlyRole(STEWARD_ROLE) whenNotPaused {
         League storage l = _leagues[leagueId];
         if (!l.exists || l.finalized) revert LeagueNotActive(leagueId);
         if (standingsRoot == bytes32(0) || totalPlayers == 0) revert InvalidStandings();
 
         bytes32[] storage roundIds = _leagueRounds[leagueId];
-        bool anyFinalized;
+        bool anyFinalized = false;
         for (uint256 i = 0; i < roundIds.length; ++i) {
             RoundState state = _rounds[roundIds[i]].state;
             if (state == RoundState.Scheduled) revert RoundsPending(leagueId);
@@ -326,19 +363,47 @@ contract Predictions is IPredictions, AccessControlDefaultAdminRules, Pausable, 
         }
         if (!anyFinalized) revert RoundsPending(leagueId);
 
+        _proposals[leagueId] = StandingsProposal({
+            standingsRoot: standingsRoot,
+            reportHash: reportHash,
+            totalPlayers: totalPlayers,
+            proposedAt: uint64(block.timestamp),
+            roundCount: l.roundCount
+        });
+        uint64 finalizableAt_ = uint64(block.timestamp) + STANDINGS_REVIEW_PERIOD;
+        emit StandingsProposed(leagueId, standingsRoot, totalPlayers, reportHash, reportURI, finalizableAt_);
+    }
+
+    /// @notice Anchor the proposed standings after the review period. Write-once.
+    function finalizeLeague(bytes32 leagueId) external onlyRole(STEWARD_ROLE) whenNotPaused {
+        League storage l = _leagues[leagueId];
+        if (!l.exists || l.finalized) revert LeagueNotActive(leagueId);
+        StandingsProposal storage p = _proposals[leagueId];
+        if (p.proposedAt == 0) revert NoStandingsProposal(leagueId);
+        uint64 finalizableAt_ = p.proposedAt + STANDINGS_REVIEW_PERIOD;
+        if (block.timestamp < finalizableAt_) revert ReviewPeriodOpen(leagueId, finalizableAt_);
+        // Every round was settled at proposal time and settled rounds never change, so only a
+        // round scheduled since then can make the standings incomplete.
+        if (l.roundCount != p.roundCount) revert StandingsOutdated(leagueId);
+
         l.finalized = true;
         l.finalizedAt = uint64(block.timestamp);
-        l.standingsRoot = standingsRoot;
-        l.totalPlayers = totalPlayers;
-        l.reportHash = reportHash;
-        emit LeagueFinalized(leagueId, standingsRoot, totalPlayers, reportHash, reportURI);
+        l.standingsRoot = p.standingsRoot;
+        l.totalPlayers = p.totalPlayers;
+        l.reportHash = p.reportHash;
+        emit LeagueFinalized(leagueId, p.standingsRoot, p.totalPlayers, p.reportHash);
     }
 
     // ---------------------------------------------------------------------
     // Admin
     // ---------------------------------------------------------------------
 
-    function pause() external onlyRole(DEFAULT_ADMIN_ROLE) {
+    function setFinalizationDelay(uint64 delay) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        _setFinalizationDelay(delay);
+    }
+
+    /// @notice The steward's hot wallet can stop the contract in minutes; only the admin resumes it.
+    function pause() external onlyRole(STEWARD_ROLE) {
         _pause();
     }
 
@@ -358,6 +423,32 @@ contract Predictions is IPredictions, AccessControlDefaultAdminRules, Pausable, 
         return _leagues[leagueId];
     }
 
+    function getStandingsProposal(bytes32 leagueId) external view returns (StandingsProposal memory) {
+        return _proposals[leagueId];
+    }
+
+    /// @notice Check one row of the standings. `inTree`: the proof matches the anchored root or,
+    ///         before finalizeLeague, the proposed one. `matchesChain`: its stats equal
+    ///         leagueStatsOf. The rank is not checked: it depends on every other row.
+    function checkStanding(
+        bytes32 leagueId,
+        StandingLeaf calldata leaf,
+        bytes32[] calldata proof
+    ) external view returns (bool inTree, bool matchesChain) {
+        League storage l = _leagues[leagueId];
+        bytes32 root = l.finalized ? l.standingsRoot : _proposals[leagueId].standingsRoot;
+        bytes32 leafHash = keccak256(bytes.concat(keccak256(abi.encode(leaf)))); // StandardMerkleTree
+        inTree = root != bytes32(0) && leaf.leagueId == leagueId && MerkleProof.verifyCalldata(proof, root, leafHash);
+
+        LeagueStats memory s = leagueStatsOf(leagueId, leaf.account);
+        matchesChain =
+            s.points == leaf.points &&
+            s.correct == leaf.correct &&
+            s.counted == leaf.counted &&
+            s.roundsPlayed == leaf.roundsPlayed &&
+            s.sumLeadTime == leaf.sumLeadTime;
+    }
+
     function leagueRoundIds(bytes32 leagueId) external view returns (bytes32[] memory) {
         return _leagueRounds[leagueId];
     }
@@ -368,6 +459,17 @@ contract Predictions is IPredictions, AccessControlDefaultAdminRules, Pausable, 
 
     function getRoundGames(bytes32 roundId) external view returns (bytes32[] memory) {
         return _roundGames[roundId];
+    }
+
+    /// @notice Earliest time `finalizeRound` can succeed, or 0 while the round is not scheduled or
+    ///         one of its games has no result yet.
+    function finalizableAt(bytes32 roundId) external view returns (uint64) {
+        Round storage r = _rounds[roundId];
+        if (r.state != RoundState.Scheduled) return 0;
+        (, uint64 lastRecordedAt, bytes32 pending) = _outcomes(roundId, r.lockTime);
+        if (pending != bytes32(0)) return 0;
+        uint64 readyAt = lastRecordedAt + finalizationDelay;
+        return readyAt > r.lockTime ? readyAt : r.lockTime;
     }
 
     function isRoundOpen(bytes32 roundId) public view returns (bool) {
@@ -413,7 +515,7 @@ contract Predictions is IPredictions, AccessControlDefaultAdminRules, Pausable, 
 
     /// @notice Aggregated layer-0 stats of `user` over the league's finalized rounds.
     ///         A round counts as played only if the user submitted and at least one game counted.
-    function leagueStatsOf(bytes32 leagueId, address user) external view returns (LeagueStats memory s) {
+    function leagueStatsOf(bytes32 leagueId, address user) public view returns (LeagueStats memory s) {
         bytes32[] storage roundIds = _leagueRounds[leagueId];
         for (uint256 i = 0; i < roundIds.length; ++i) {
             Round storage r = _rounds[roundIds[i]];
@@ -433,6 +535,31 @@ contract Predictions is IPredictions, AccessControlDefaultAdminRules, Pausable, 
     // ---------------------------------------------------------------------
     // Internal
     // ---------------------------------------------------------------------
+
+    /// @dev Outcomes of a round's games (2 bits each) and the latest time one of them was recorded.
+    ///      `pending` is the first game without a result, or 0 when all are final. A game counts
+    ///      only if it was played or forfeited and did not start before the lock.
+    function _outcomes(
+        bytes32 roundId,
+        uint64 lockTime
+    ) private view returns (uint64 outcomes, uint64 lastRecordedAt, bytes32 pending) {
+        bytes32[] storage gameIds = _roundGames[roundId];
+        for (uint256 i = 0; i < gameIds.length; ++i) {
+            (IResultsRegistry.GameStatus status, IResultsRegistry.Side winner, uint64 tipOff, uint64 recordedAt) = registry
+                .outcomeOf(gameIds[i]);
+            if (recordedAt == 0) return (0, 0, gameIds[i]);
+            if (recordedAt > lastRecordedAt) lastRecordedAt = recordedAt;
+            bool counts = (status == IResultsRegistry.GameStatus.Final ||
+                status == IResultsRegistry.GameStatus.Forfeit) && tipOff >= lockTime;
+            if (counts) outcomes |= uint64(uint8(winner)) << uint8(2 * i); // i < MAX_GAMES
+        }
+    }
+
+    function _setFinalizationDelay(uint64 delay) private {
+        if (delay < MIN_FINALIZATION_DELAY || delay > MAX_FINALIZATION_DELAY) revert DelayOutOfRange(delay);
+        finalizationDelay = delay;
+        emit FinalizationDelaySet(delay);
+    }
 
     function _openRound(bytes32 roundId) private view returns (Round storage r) {
         if (!isRoundOpen(roundId)) revert RoundNotOpen(roundId);
@@ -484,6 +611,7 @@ contract Predictions is IPredictions, AccessControlDefaultAdminRules, Pausable, 
     ) private view returns (bool) {
         bytes32 digest = submissionDigest(user, roundId, picksHash, confirmedAt);
         // tryRecover rejects malleable (high-s) and malformed signatures.
+        // slither-disable-next-line unused-return (the error argument adds nothing to `err`)
         (address recovered, ECDSA.RecoverError err, ) = ECDSA.tryRecoverCalldata(digest, signature);
         return err == ECDSA.RecoverError.NoError && recovered == user;
     }

@@ -21,3 +21,25 @@ jobs:
       - run: pnpm hardhat test --coverage
       - name: Encoding vectors are up to date
         run: pnpm vectors && git diff --exit-code test/vectors
+
+  slither:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile # OpenZeppelin sources for the remaps
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install Slither and solc 0.8.28
+        run: |
+          pip install slither-analyzer==0.11.6 solc-select==1.2.0
+          solc-select install 0.8.28
+          solc-select use 0.8.28
+      # Fails on medium or higher (slither.config.json). The low findings are expected by design:
+      # time comparisons on block.timestamp, and calls to our own registry inside loops.
+      - run: slither contracts --config-file slither.config.json

@@ -88,7 +88,7 @@
     ]
   },
   "standings": {
-    "root": "0xa1297892939747eede445d004633a4ef0c124b18a7cddc0f01608671132a5fd4",
+    "root": "0x4b13e4331eb3d93edfeadb2a8782b07e2b06dcea373c20ad52fff5ebe559e442",
     "leaves": [
       {
         "account": "0x3d67e165c374DF796477c92fF9077de526e36287",
@@ -97,8 +97,9 @@
         "correct": 2,
         "counted": 2,
         "roundsPlayed": 1,
+        "sumLeadTime": "7200",
         "proof": [
-          "0x9810330c686c00f542dfcf0e8561771276439dadfd7384e0b3d73a2d749e8d0f"
+          "0x05d3ed4636e30933e10841510e1e7d42820bba5464d230d3d558c8ea532e6cb7"
         ]
       },
       {
@@ -108,8 +109,9 @@
         "correct": 0,
         "counted": 2,
         "roundsPlayed": 1,
+        "sumLeadTime": "3600",
         "proof": [
-          "0x2af1e627e552188d96c20b116ec21ba739e95338a070140728f208d6102f33ba"
+          "0x2f388781e23826505ecede6c853c244ce7b8c02dd32861b19ab5b860ee9abdb6"
         ]
       }
     ]

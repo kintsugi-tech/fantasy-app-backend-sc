@@ -13,6 +13,7 @@ import {IResultsRegistry} from "./interfaces/IResultsRegistry.sol";
 ///         Lifecycle of a game:
 ///           registerGames (operator)  ->  Scheduled
 ///           recordResults (relayer)   ->  Final | Forfeit | Void, final as soon as it is written
+///                                         (never before tip-off)
 ///           voidGame (steward)        ->  Void, final (only when no result arrived within
 ///                                         `postponeWindow` after tip-off)
 ///
@@ -20,6 +21,10 @@ import {IResultsRegistry} from "./interfaces/IResultsRegistry.sol";
 ///         relayer verifies that the public file's SHA-256 equals the attested `sha256_pub` and
 ///         stores it as `sourceHash`, so anyone can re-check a stored result against the attested
 ///         file. A recorded result never changes: there is no correction or challenge period.
+///         Predictions waits `finalizationDelay` after a round's last result before settling it,
+///         so the steward can still cancel a round built on a wrong result.
+///
+///         Pause: the steward stops every write in minutes; only the admin (cold wallet) resumes.
 contract ResultsRegistry is IResultsRegistry, AccessControlDefaultAdminRules, Pausable {
     bytes32 public constant OPERATOR_ROLE = keccak256("OPERATOR_ROLE");
     bytes32 public constant RESULTS_RELAYER_ROLE = keccak256("RESULTS_RELAYER_ROLE");
@@ -35,9 +40,11 @@ contract ResultsRegistry is IResultsRegistry, AccessControlDefaultAdminRules, Pa
 
     mapping(bytes32 gameId => Game) private _games;
 
+    error ZeroAddress();
     error EmptyBatch();
     error BatchTooLarge(uint256 size, uint256 max);
     error InvalidGameInfo(bytes32 gameId);
+    error TipOffInPast(bytes32 gameId, uint64 tipOff);
     error GameAlreadyRegistered(bytes32 gameId);
     error GameNotScheduled(bytes32 gameId);
     error ResultAlreadyRecorded(bytes32 gameId);
@@ -63,11 +70,19 @@ contract ResultsRegistry is IResultsRegistry, AccessControlDefaultAdminRules, Pa
     event GameVoided(bytes32 indexed gameId, string reason);
     event PostponeWindowSet(uint64 postponeWindow);
 
+    /// @dev Every role holder is set here, so the deployer gets no role: any account can deploy.
     constructor(
         uint48 adminDelay,
         address admin,
-        uint64 initialPostponeWindow
+        uint64 initialPostponeWindow,
+        address operator,
+        address resultsRelayer,
+        address steward
     ) AccessControlDefaultAdminRules(adminDelay, admin) {
+        if (operator == address(0) || resultsRelayer == address(0) || steward == address(0)) revert ZeroAddress();
+        _grantRole(OPERATOR_ROLE, operator);
+        _grantRole(RESULTS_RELAYER_ROLE, resultsRelayer);
+        _grantRole(STEWARD_ROLE, steward);
         _setPostponeWindow(initialPostponeWindow);
     }
 
@@ -98,12 +113,14 @@ contract ResultsRegistry is IResultsRegistry, AccessControlDefaultAdminRules, Pa
         }
     }
 
-    /// @notice Move a game that has no result yet. Rounds whose lock is past a game's new tip-off
-    ///         will not count that game (see Predictions.finalizeRound).
+    /// @notice Move a game that has no result yet to a future time. Rounds whose lock is past a
+    ///         game's new tip-off will not count that game (see Predictions.finalizeRound). As the
+    ///         new tip-off must be in the future, that can happen only before the round locks: once
+    ///         picks are locked, no move can drop a game from the score.
     function rescheduleGame(bytes32 gameId, uint64 newTipOff) external onlyRole(OPERATOR_ROLE) whenNotPaused {
         Game storage g = _games[gameId];
         if (g.status != GameStatus.Scheduled) revert GameNotScheduled(gameId);
-        if (newTipOff == 0) revert InvalidGameInfo(gameId);
+        if (newTipOff <= block.timestamp) revert TipOffInPast(gameId, newTipOff);
         uint64 old = g.tipOff;
         g.tipOff = newTipOff;
         emit GameRescheduled(gameId, old, newTipOff);
@@ -145,7 +162,7 @@ contract ResultsRegistry is IResultsRegistry, AccessControlDefaultAdminRules, Pa
     // ---------------------------------------------------------------------
 
     /// @notice Void a game that got no result within `postponeWindow` after tip-off. Final.
-    function voidGame(bytes32 gameId, string calldata reason) external onlyRole(STEWARD_ROLE) {
+    function voidGame(bytes32 gameId, string calldata reason) external onlyRole(STEWARD_ROLE) whenNotPaused {
         Game storage g = _games[gameId];
         if (g.status != GameStatus.Scheduled) revert GameNotScheduled(gameId);
         uint64 voidableAt = g.tipOff + postponeWindow;
@@ -165,7 +182,8 @@ contract ResultsRegistry is IResultsRegistry, AccessControlDefaultAdminRules, Pa
         _setPostponeWindow(window);
     }
 
-    function pause() external onlyRole(DEFAULT_ADMIN_ROLE) {
+    /// @notice The steward's hot wallet can stop the registry in minutes; only the admin resumes it.
+    function pause() external onlyRole(STEWARD_ROLE) {
         _pause();
     }
 
@@ -188,9 +206,9 @@ contract ResultsRegistry is IResultsRegistry, AccessControlDefaultAdminRules, Pa
 
     function outcomeOf(
         bytes32 gameId
-    ) external view returns (bool isFinal_, GameStatus status, Side winner, uint64 tipOff) {
+    ) external view returns (GameStatus status, Side winner, uint64 tipOff, uint64 recordedAt) {
         Game storage g = _games[gameId];
-        return (isFinal(gameId), g.status, g.winner, g.tipOff);
+        return (g.status, g.winner, g.tipOff, g.recordedAt);
     }
 
     // ---------------------------------------------------------------------
@@ -200,9 +218,10 @@ contract ResultsRegistry is IResultsRegistry, AccessControlDefaultAdminRules, Pa
     function _writeResult(Game storage g, ResultInput calldata r) private {
         if (r.homeTeam != g.homeTeam || r.awayTeam != g.awayTeam) revert TeamsMismatch(r.gameId);
         _validateResult(r);
-        // A played or forfeited game cannot have a result before it started. A void (cancelled)
-        // game can: nobody scores on it, so knowing it early gives no advantage.
-        if (r.status != GameStatus.Void && block.timestamp < g.tipOff) revert BeforeTipOff(r.gameId);
+        // No result before tip-off, whatever the status. A game cancelled in advance is recorded as
+        // Void once its tip-off has passed: an early Void would let the automated key void any
+        // future fixture, while the steward has to wait `postponeWindow` for the same.
+        if (block.timestamp < g.tipOff) revert BeforeTipOff(r.gameId);
         uint256 idLength = bytes(r.attestationId).length;
         if (r.sourceHash == bytes32(0) || idLength == 0 || idLength > MAX_ATTESTATION_ID_LENGTH) {
             revert InvalidSource(r.gameId);
@@ -213,14 +232,13 @@ contract ResultsRegistry is IResultsRegistry, AccessControlDefaultAdminRules, Pa
         g.homeScore = r.homeScore;
         g.awayScore = r.awayScore;
         g.overtimes = r.overtimes;
-        g.sourceHash = r.sourceHash;
-        g.attestationKey = keccak256(bytes(r.attestationId));
+        g.sourceHash = r.sourceHash; // the attestation id lives in the ResultRecorded event
         g.recordedAt = uint64(block.timestamp);
     }
 
     /// @dev Catches parser bugs: the stored result must be internally consistent.
     function _validateResult(ResultInput calldata r) private pure {
-        bool ok;
+        bool ok = false; // any other status stays invalid
         if (r.status == GameStatus.Final) {
             // No draws in basketball; the winner is the side with more points.
             ok =

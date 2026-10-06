@@ -14,6 +14,8 @@ const compiler = {
 export default defineConfig({
   plugins: [hardhatToolboxViemPlugin, hardhatVerify],
   solidity: {
+    // `production` (used by the deploy scripts) is identical to `default` (used by the tests) on
+    // purpose: the bytecode that goes on-chain is the bytecode the test suite ran against.
     profiles: {
       default: compiler,
       production: compiler,
@@ -24,7 +26,7 @@ export default defineConfig({
       // Solidity tests read the shared EIP-712 / picksHash vectors (test/vectors/*.json).
       fsPermissions: { readDirectory: ['./test/vectors'] },
       fuzz: { runs: 512 },
-      invariant: { runs: 64, depth: 32, failOnRevert: false },
+      invariant: { runs: 256, depth: 64, failOnRevert: false },
     },
   },
   networks: {
@@ -43,6 +45,9 @@ export default defineConfig({
       chainId: 1439,
       accounts: [configVariable('INJECTIVE_TESTNET_DEPLOYER_KEY')],
     },
+    // Keep the mainnet deployer key in the encrypted keystore, not in .env:
+    //   pnpm hardhat keystore set INJECTIVE_MAINNET_DEPLOYER_KEY
+    // The deployer gets no role (see ignition/modules/M2.ts): it only pays for the deploy.
     injectiveMainnet: {
       type: 'http',
       chainType: 'l1',

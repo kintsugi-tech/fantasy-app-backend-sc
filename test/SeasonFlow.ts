@@ -19,6 +19,7 @@ import * as m2 from '../scripts/lib/m2.js'
 
 const HOUR = 3600
 const POSTPONE = 7 * 24 * HOUR
+const FINALIZATION_DELAY = 24 * HOUR
 
 describe('M2 season flow', async () => {
   const { viem, networkHelpers } = await network.create()
@@ -27,15 +28,23 @@ describe('M2 season flow', async () => {
   const chainId = await publicClient.getChainId()
 
   async function deployM2() {
-    const registry = await viem.deployContract('ResultsRegistry', [0, admin.account.address, BigInt(POSTPONE)])
-    const predictions = await viem.deployContract('Predictions', [0, admin.account.address, registry.address])
-
-    await registry.write.grantRole([await registry.read.OPERATOR_ROLE(), operator.account.address])
-    await registry.write.grantRole([await registry.read.RESULTS_RELAYER_ROLE(), resultsRelayer.account.address])
-    await registry.write.grantRole([await registry.read.STEWARD_ROLE(), steward.account.address])
-    await predictions.write.grantRole([await predictions.read.OPERATOR_ROLE(), operator.account.address])
-    await predictions.write.grantRole([await predictions.read.SUBMITTER_ROLE(), submitter.account.address])
-    await predictions.write.grantRole([await predictions.read.STEWARD_ROLE(), steward.account.address])
+    const registry = await viem.deployContract('ResultsRegistry', [
+      0,
+      admin.account.address,
+      BigInt(POSTPONE),
+      operator.account.address,
+      resultsRelayer.account.address,
+      steward.account.address,
+    ])
+    const predictions = await viem.deployContract('Predictions', [
+      0,
+      admin.account.address,
+      registry.address,
+      operator.account.address,
+      submitter.account.address,
+      steward.account.address,
+      BigInt(FINALIZATION_DELAY),
+    ])
     return { registry, predictions }
   }
 
@@ -175,7 +184,8 @@ describe('M2 season flow', async () => {
     })
     await c.registry.write.recordResults([results.slice(0, 3)], { account: resultsRelayer.account })
 
-    // A round settles only once every game has a result; results are final as soon as recorded.
+    // A round settles only once every game has a result, and a full delay after the last one:
+    // results are final as soon as recorded, the delay leaves the steward time to cancel.
     await viem.assertions.revertWithCustomErrorWithArgs(
       c.predictions.write.finalizeRound([roundId], { account: anyone.account }),
       c.predictions,
@@ -183,6 +193,15 @@ describe('M2 season flow', async () => {
       [gameIds[3]],
     )
     await c.registry.write.recordResults([results.slice(3)], { account: resultsRelayer.account })
+    const readyAt = await c.predictions.read.finalizableAt([roundId])
+    assert.equal(readyAt, BigInt((await networkHelpers.time.latest()) + FINALIZATION_DELAY))
+    await viem.assertions.revertWithCustomErrorWithArgs(
+      c.predictions.write.finalizeRound([roundId], { account: anyone.account }),
+      c.predictions,
+      'FinalizationPending',
+      [roundId, readyAt],
+    )
+    await networkHelpers.time.increaseTo(Number(readyAt))
     await c.predictions.write.finalizeRound([roundId], { account: anyone.account })
 
     // Scores from the chain equal the TS mirror of the scoring rules.
@@ -212,32 +231,64 @@ describe('M2 season flow', async () => {
     )
 
     const tree = StandardMerkleTree.of(
-      ranked.map((p) => [leagueId, p.account, p.rank, p.points, p.correct, p.counted, p.roundsPlayed]),
+      ranked.map((p) => m2.standingLeafOf(leagueId, p)),
       [...m2.STANDINGS_LEAF_ENCODING],
     )
-    const report = JSON.stringify(tree.dump())
-    await c.predictions.write.finalizeLeague(
-      [leagueId, tree.root as Hex, ranked.length, keccak256(stringToHex(report)), 'https://m2.example/reports/mbl.json'],
+    const report = JSON.stringify(tree.dump(), (_, v) => (typeof v === 'bigint' ? v.toString() : v))
+    const reportHash = keccak256(stringToHex(report))
+    await c.predictions.write.proposeStandings(
+      [leagueId, tree.root as Hex, ranked.length, reportHash, 'https://m2.example/reports/mbl.json'],
       { account: steward.account },
     )
+
+    // During the review anyone can check a row against the proposal and against the chain.
+    const top = ranked[0]
+    const topLeaf = {
+      leagueId,
+      account: top.account,
+      rank: top.rank,
+      points: top.points,
+      correct: top.correct,
+      counted: top.counted,
+      roundsPlayed: top.roundsPlayed,
+      sumLeadTime: top.sumLeadTime,
+    }
+    assert.deepEqual(await c.predictions.read.checkStanding([leagueId, topLeaf, tree.getProof(0) as Hex[]]), [true, true])
+    // A row altered after the fact is in no proposed tree.
+    const forged = { ...top, points: top.points + 1 }
+    const forgedTree = StandardMerkleTree.of([m2.standingLeafOf(leagueId, forged)], [...m2.STANDINGS_LEAF_ENCODING])
+    const [inTree] = await c.predictions.read.checkStanding([
+      leagueId,
+      { ...topLeaf, points: forged.points },
+      forgedTree.getProof(0) as Hex[],
+    ])
+    assert.equal(inTree, false)
+
+    const proposal = await c.predictions.read.getStandingsProposal([leagueId])
+    const finalizableAt = proposal.proposedAt + 48n * BigInt(HOUR)
+    await viem.assertions.revertWithCustomErrorWithArgs(
+      c.predictions.write.finalizeLeague([leagueId], { account: steward.account }),
+      c.predictions,
+      'ReviewPeriodOpen',
+      [leagueId, finalizableAt],
+    )
+    await networkHelpers.time.increaseTo(Number(finalizableAt))
+    await c.predictions.write.finalizeLeague([leagueId], { account: steward.account })
 
     // Anchored once: anyone can check a player's standing against the on-chain root.
     const league = await c.predictions.read.getLeague([leagueId])
     assert.equal(league.standingsRoot, tree.root)
-    const top = ranked[0]
+    assert.equal(league.reportHash, reportHash)
     assert.ok(
       StandardMerkleTree.verify(
         league.standingsRoot,
         [...m2.STANDINGS_LEAF_ENCODING],
-        [leagueId, top.account, top.rank, top.points, top.correct, top.counted, top.roundsPlayed],
+        m2.standingLeafOf(leagueId, top),
         tree.getProof(0),
       ),
     )
     await viem.assertions.revertWithCustomErrorWithArgs(
-      c.predictions.write.finalizeLeague(
-        [leagueId, tree.root as Hex, ranked.length, keccak256(stringToHex(report)), 'https://m2.example/reports/mbl.json'],
-        { account: steward.account },
-      ),
+      c.predictions.write.finalizeLeague([leagueId], { account: steward.account }),
       c.predictions,
       'LeagueNotActive',
       [leagueId],

@@ -77,6 +77,32 @@ contract ResultsRegistryTest is M2Base {
         registry.registerGames(new IResultsRegistry.GameInfo[](1));
     }
 
+    function test_ConstructorGrantsRolesNotTheDeployer() public view {
+        assertTrue(registry.hasRole(registry.OPERATOR_ROLE(), operator));
+        assertTrue(registry.hasRole(registry.RESULTS_RELAYER_ROLE(), resultsRelayer));
+        assertTrue(registry.hasRole(registry.STEWARD_ROLE(), steward));
+        assertEq(registry.defaultAdmin(), admin);
+        // This test contract deployed the registry and holds nothing.
+        assertFalse(registry.hasRole(registry.DEFAULT_ADMIN_ROLE(), address(this)));
+        assertFalse(registry.hasRole(registry.OPERATOR_ROLE(), address(this)));
+        assertFalse(registry.hasRole(registry.RESULTS_RELAYER_ROLE(), address(this)));
+        assertFalse(registry.hasRole(registry.STEWARD_ROLE(), address(this)));
+    }
+
+    function test_RescheduleRejectsPastTipOff() public {
+        vm.warp(T0 + 1 hours);
+        vm.startPrank(operator);
+        vm.expectRevert(abi.encodeWithSelector(ResultsRegistry.TipOffInPast.selector, game, uint64(T0)));
+        registry.rescheduleGame(game, T0);
+        vm.expectRevert(
+            abi.encodeWithSelector(ResultsRegistry.TipOffInPast.selector, game, uint64(block.timestamp))
+        );
+        registry.rescheduleGame(game, uint64(block.timestamp));
+        registry.rescheduleGame(game, uint64(block.timestamp) + 1);
+        vm.stopPrank();
+        assertEq(registry.getGame(game).tipOff, block.timestamp + 1);
+    }
+
     function test_RescheduleOnlyWithoutResult() public {
         vm.prank(operator);
         registry.rescheduleGame(game, tipOff + 1 hours);
@@ -111,7 +137,6 @@ contract ResultsRegistryTest is M2Base {
         assertEq(uint8(g.status), uint8(IResultsRegistry.GameStatus.Final));
         assertEq(uint8(g.winner), uint8(IResultsRegistry.Side.Away));
         assertEq(g.sourceHash, r.sourceHash);
-        assertEq(g.attestationKey, keccak256(bytes(r.attestationId)));
         assertEq(g.recordedAt, block.timestamp);
         assertTrue(registry.isFinal(game)); // final as soon as it is written
     }
@@ -140,8 +165,20 @@ contract ResultsRegistryTest is M2Base {
         this.recordAsRelayer(forfeit);
     }
 
-    function test_RecordVoidBeforeTipOff() public {
-        _record(_result(game, IResultsRegistry.GameStatus.Void, IResultsRegistry.Side.None, 0, 0));
+    function test_RecordVoidOnlyFromTipOff() public {
+        IResultsRegistry.ResultInput memory void_ = _result(
+            game,
+            IResultsRegistry.GameStatus.Void,
+            IResultsRegistry.Side.None,
+            0,
+            0
+        );
+        vm.warp(tipOff - 1);
+        vm.expectRevert(abi.encodeWithSelector(ResultsRegistry.BeforeTipOff.selector, game));
+        this.recordAsRelayer(void_);
+
+        vm.warp(tipOff);
+        _record(void_);
         assertEq(uint8(registry.getGame(game).status), uint8(IResultsRegistry.GameStatus.Void));
     }
 
@@ -228,11 +265,71 @@ contract ResultsRegistryTest is M2Base {
         );
         registry.recordResults(batch);
 
-        vm.prank(admin);
+        vm.prank(steward);
         registry.pause();
         vm.prank(resultsRelayer);
         vm.expectRevert(Pausable.EnforcedPause.selector);
         registry.recordResults(batch);
+    }
+
+    // --- pause -----------------------------------------------------------------
+
+    function test_StewardPausesOnlyAdminUnpauses() public {
+        bytes32 stewardRole = registry.STEWARD_ROLE();
+        bytes32 adminRole = registry.DEFAULT_ADMIN_ROLE();
+        address[3] memory others = [operator, resultsRelayer, stranger];
+        for (uint256 i = 0; i < others.length; ++i) {
+            vm.prank(others[i]);
+            vm.expectRevert(
+                abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, others[i], stewardRole)
+            );
+            registry.pause();
+        }
+
+        vm.prank(steward);
+        registry.pause();
+        assertTrue(registry.paused());
+
+        vm.prank(steward);
+        vm.expectRevert(
+            abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, steward, adminRole)
+        );
+        registry.unpause();
+
+        vm.prank(admin);
+        registry.unpause();
+        assertFalse(registry.paused());
+    }
+
+    /// Every write stops; the admin can still manage roles and parameters, and reads work.
+    function test_PauseStopsEveryWrite() public {
+        vm.prank(steward);
+        registry.pause();
+
+        vm.prank(operator);
+        vm.expectRevert(Pausable.EnforcedPause.selector);
+        registry.registerGames(new IResultsRegistry.GameInfo[](1));
+
+        vm.prank(operator);
+        vm.expectRevert(Pausable.EnforcedPause.selector);
+        registry.rescheduleGame(game, tipOff + 1 hours);
+
+        vm.warp(tipOff + POSTPONE + 1);
+        IResultsRegistry.ResultInput memory r = _final(game, true);
+        vm.expectRevert(Pausable.EnforcedPause.selector);
+        this.recordAsRelayer(r);
+
+        vm.prank(steward);
+        vm.expectRevert(Pausable.EnforcedPause.selector);
+        registry.voidGame(game, "paused");
+
+        vm.startPrank(admin);
+        registry.revokeRole(registry.RESULTS_RELAYER_ROLE(), resultsRelayer);
+        registry.setPostponeWindow(2 days);
+        vm.stopPrank();
+        assertFalse(registry.hasRole(registry.RESULTS_RELAYER_ROLE(), resultsRelayer));
+        assertEq(registry.getGame(game).tipOff, tipOff);
+        assertFalse(registry.isFinal(game));
     }
 
     // --- voidGame --------------------------------------------------------------

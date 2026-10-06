@@ -63,11 +63,11 @@ async function main() {
 
   const outcomes = [m2.OUTCOME.HOME, m2.OUTCOME.NOT_COUNTED, m2.OUTCOME.HOME]
   const standings = [
-    { account: submissions[0].user, rank: 1, points: 2, correct: 2, counted: 2, roundsPlayed: 1 },
-    { account: submissions[1].user, rank: 2, points: 0, correct: 0, counted: 2, roundsPlayed: 1 },
+    { account: submissions[0].user, rank: 1, points: 2, correct: 2, counted: 2, roundsPlayed: 1, sumLeadTime: 7_200n },
+    { account: submissions[1].user, rank: 2, points: 0, correct: 0, counted: 2, roundsPlayed: 1, sumLeadTime: 3_600n },
   ]
   const tree = StandardMerkleTree.of(
-    standings.map((s) => [leagueId, s.account, s.rank, s.points, s.correct, s.counted, s.roundsPlayed]),
+    standings.map((s) => m2.standingLeafOf(leagueId, s)),
     [...m2.STANDINGS_LEAF_ENCODING],
   )
 
@@ -90,7 +90,7 @@ async function main() {
     },
     standings: {
       root: tree.root,
-      leaves: standings.map((s, i) => ({ ...s, proof: tree.getProof(i) })),
+      leaves: standings.map((s, i) => ({ ...s, sumLeadTime: s.sumLeadTime.toString(), proof: tree.getProof(i) })),
     },
   }
 

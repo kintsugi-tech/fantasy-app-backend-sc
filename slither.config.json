@@ -1,0 +1,8 @@
+{
+  "solc_remaps": "@openzeppelin/=node_modules/@openzeppelin/",
+  "solc_args": "--evm-version cancun --optimize --optimize-runs 200",
+  "filter_paths": "node_modules",
+  "exclude_informational": true,
+  "exclude_optimization": true,
+  "fail_on": "medium"
+}

@@ -50,8 +50,7 @@ interface IResultsRegistry {
         uint16 homeScore;
         uint16 awayScore;
         uint8 overtimes;
-        bytes32 sourceHash;
-        bytes32 attestationKey; // keccak256(bytes(attestationId))
+        bytes32 sourceHash; // the attestation id is in the ResultRecorded event
     }
 
     function getGame(bytes32 gameId) external view returns (Game memory);
@@ -59,8 +58,9 @@ interface IResultsRegistry {
     /// @notice Whether the game has a result (or was voided). Results never change once recorded.
     function isFinal(bytes32 gameId) external view returns (bool);
 
-    /// @notice Compact view used by Predictions to settle rounds.
+    /// @notice Compact view (one slot) used by Predictions to schedule and settle rounds.
+    ///         `recordedAt` is 0 until the game has a result or was voided.
     function outcomeOf(
         bytes32 gameId
-    ) external view returns (bool isFinal_, GameStatus status, Side winner, uint64 tipOff);
+    ) external view returns (GameStatus status, Side winner, uint64 tipOff, uint64 recordedAt);
 }

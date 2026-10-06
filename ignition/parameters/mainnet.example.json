@@ -1,0 +1,12 @@
+{
+  "M2": {
+    "admin": "0x<cold wallet>",
+    "adminDelay": 172800,
+    "postponeWindow": "604800n",
+    "finalizationDelay": "86400n",
+    "operator": "0x<worker operator key>",
+    "resultsRelayer": "0x<worker results relayer key>",
+    "submitter": "0x<worker submitter key>",
+    "steward": "0x<steward browser wallet, also pauses>"
+  }
+}

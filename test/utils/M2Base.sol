@@ -28,6 +28,7 @@ abstract contract M2Base is Test {
     uint256 internal carolKey;
 
     uint64 internal constant POSTPONE = 7 days;
+    uint64 internal constant FINALIZATION_DELAY = 24 hours;
     uint64 internal constant T0 = 1_800_000_000;
 
     bytes32 internal constant LEAGUE = keccak256("mbl-2026-27-main");
@@ -36,17 +37,8 @@ abstract contract M2Base is Test {
 
     function setUp() public virtual {
         vm.warp(T0);
-        registry = new ResultsRegistry(0, admin, POSTPONE);
-        predictions = new Predictions(0, admin, registry);
-
-        vm.startPrank(admin);
-        registry.grantRole(registry.OPERATOR_ROLE(), operator);
-        registry.grantRole(registry.RESULTS_RELAYER_ROLE(), resultsRelayer);
-        registry.grantRole(registry.STEWARD_ROLE(), steward);
-        predictions.grantRole(predictions.OPERATOR_ROLE(), operator);
-        predictions.grantRole(predictions.SUBMITTER_ROLE(), submitter);
-        predictions.grantRole(predictions.STEWARD_ROLE(), steward);
-        vm.stopPrank();
+        registry = new ResultsRegistry(0, admin, POSTPONE, operator, resultsRelayer, steward);
+        predictions = new Predictions(0, admin, registry, operator, submitter, steward, FINALIZATION_DELAY);
 
         (alice, aliceKey) = makeAddrAndKey("alice");
         (bob, bobKey) = makeAddrAndKey("bob");
@@ -139,6 +131,13 @@ abstract contract M2Base is Test {
         for (uint256 i = 0; i < ids.length; ++i) batch[i] = _final(ids[i], homeWins[i]);
         vm.prank(resultsRelayer);
         registry.recordResults(batch);
+    }
+
+    /// @dev Waits out the finalization delay, then settles the round (permissionless).
+    function _finalizeRound(bytes32 roundId) internal {
+        uint64 readyAt = predictions.finalizableAt(roundId);
+        if (block.timestamp < readyAt) vm.warp(readyAt);
+        predictions.finalizeRound(roundId);
     }
 
     // --- predictions -------------------------------------------------------

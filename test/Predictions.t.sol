@@ -7,6 +7,7 @@ import {Pausable} from "@openzeppelin/contracts/utils/Pausable.sol";
 import {IPredictions} from "../contracts/interfaces/IPredictions.sol";
 import {IResultsRegistry} from "../contracts/interfaces/IResultsRegistry.sol";
 import {Predictions} from "../contracts/Predictions.sol";
+import {ResultsRegistry} from "../contracts/ResultsRegistry.sol";
 import {M2Base} from "./utils/M2Base.sol";
 
 contract PredictionsTest is M2Base {
@@ -104,7 +105,8 @@ contract PredictionsTest is M2Base {
     }
 
     function test_ScheduleRoundRejectsGameWithResult() public {
-        bytes32[] memory more = _registerGames(1, lockTime + 1 days);
+        bytes32[] memory more = _registerGames(1, uint64(block.timestamp) + 1 hours);
+        vm.warp(block.timestamp + 1 hours);
         _record(_result(more[0], IResultsRegistry.GameStatus.Void, IResultsRegistry.Side.None, 0, 0));
         _expectSchedule(
             2,
@@ -274,7 +276,7 @@ contract PredictionsTest is M2Base {
         vm.expectRevert(abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, alice, role));
         predictions.submitFor(alice, roundId, it.picksHash, it.picks, it.confirmedAt, it.signature);
 
-        vm.prank(admin);
+        vm.prank(steward);
         predictions.pause();
         vm.prank(submitter);
         vm.expectRevert(Pausable.EnforcedPause.selector);
@@ -345,6 +347,108 @@ contract PredictionsTest is M2Base {
         predictions.updateRoundLock(roundId, lockTime - 30 minutes);
     }
 
+    /// C5: a lock moved earlier stays after every stored confirmedAt, so leagueStatsOf cannot
+    /// underflow on `lockTime - confirmedAt`.
+    function test_UpdateRoundLockStaysAfterSkewedConfirmations() public {
+        uint64 now_ = uint64(block.timestamp);
+        Predictions.BatchItem memory skewed = _item(aliceKey, alice, roundId, _picks(H, A, H), now_ + 50);
+        vm.prank(submitter);
+        predictions.submitFor(alice, roundId, skewed.picksHash, skewed.picks, skewed.confirmedAt, skewed.signature);
+
+        vm.startPrank(operator);
+        vm.expectRevert(Predictions.InvalidSchedule.selector);
+        predictions.updateRoundLock(roundId, now_ + 30); // the report's case: before confirmedAt
+        vm.expectRevert(Predictions.InvalidSchedule.selector);
+        predictions.updateRoundLock(roundId, now_ + 60);
+        predictions.updateRoundLock(roundId, now_ + 61);
+        vm.stopPrank();
+
+        vm.warp(lockTime + 3 hours);
+        _settleGames(games, _bools(true, false, true));
+        _finalizeRound(roundId);
+        IPredictions.LeagueStats memory s = predictions.leagueStatsOf(LEAGUE, alice);
+        assertEq(s.sumLeadTime, 11);
+        assertEq(s.points, 3);
+    }
+
+    // --- finalization delay ------------------------------------------------------
+
+    function test_FinalizationDelayCountsFromTheLastResult() public {
+        assertEq(predictions.finalizableAt(roundId), 0); // no results yet
+        assertEq(predictions.finalizableAt(keccak256("unknown")), 0);
+
+        vm.warp(lockTime + 3 hours);
+        _record(_final(games[0], true));
+        assertEq(predictions.finalizableAt(roundId), 0); // two games still pending
+
+        vm.warp(lockTime + 10 hours);
+        IResultsRegistry.ResultInput[] memory batch = new IResultsRegistry.ResultInput[](2);
+        batch[0] = _final(games[1], false);
+        batch[1] = _final(games[2], true);
+        vm.prank(resultsRelayer);
+        registry.recordResults(batch);
+
+        uint64 readyAt = lockTime + 10 hours + FINALIZATION_DELAY;
+        assertEq(predictions.finalizableAt(roundId), readyAt);
+        vm.warp(lockTime + 3 hours + FINALIZATION_DELAY); // a delay after the first result is not enough
+        vm.expectRevert(abi.encodeWithSelector(Predictions.FinalizationPending.selector, roundId, readyAt));
+        predictions.finalizeRound(roundId);
+
+        vm.warp(readyAt);
+        predictions.finalizeRound(roundId);
+        assertEq(predictions.finalizableAt(roundId), 0); // finalized
+    }
+
+    /// Results recorded before the lock (games moved earlier) never make a round settle before it.
+    function test_FinalizableAtIsNeverBeforeTheLock() public {
+        vm.startPrank(operator);
+        for (uint256 i = 0; i < 3; ++i) registry.rescheduleGame(games[i], T0 + 2 hours);
+        vm.stopPrank();
+        vm.warp(T0 + 3 hours);
+        _settleGames(games, _bools(true, true, true));
+        assertEq(predictions.finalizableAt(roundId), lockTime);
+
+        vm.warp(lockTime);
+        predictions.finalizeRound(roundId);
+        assertEq(predictions.getRound(roundId).outcomes, 0); // all moved before the lock: none counts
+    }
+
+    /// The window is what makes a wrong result fixable: the steward cancels the round in it.
+    function test_StewardCancelsWithinTheWindow() public {
+        _submit(aliceKey, alice, roundId, _picks(H, H, H));
+        vm.warp(lockTime + 3 hours);
+        _settleGames(games, _bools(true, true, false)); // say game 3 was matched to the wrong file
+
+        vm.prank(steward);
+        predictions.cancelRound(roundId, "game 3 result attached to the wrong game");
+        vm.warp(block.timestamp + FINALIZATION_DELAY);
+        vm.expectRevert(abi.encodeWithSelector(Predictions.RoundNotActive.selector, roundId));
+        predictions.finalizeRound(roundId);
+        _assertScore(alice, 0, 0);
+    }
+
+    function test_SetFinalizationDelay() public {
+        bytes32 role = predictions.DEFAULT_ADMIN_ROLE();
+        vm.prank(steward);
+        vm.expectRevert(abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, steward, role));
+        predictions.setFinalizationDelay(2 hours);
+
+        vm.startPrank(admin);
+        vm.expectRevert(abi.encodeWithSelector(Predictions.DelayOutOfRange.selector, uint64(1 hours - 1)));
+        predictions.setFinalizationDelay(1 hours - 1);
+        vm.expectRevert(abi.encodeWithSelector(Predictions.DelayOutOfRange.selector, uint64(7 days + 1)));
+        predictions.setFinalizationDelay(7 days + 1);
+        vm.expectEmit(address(predictions));
+        emit Predictions.FinalizationDelaySet(1 hours);
+        predictions.setFinalizationDelay(1 hours);
+        vm.stopPrank();
+
+        // It applies to rounds already waiting.
+        vm.warp(lockTime + 3 hours);
+        _settleGames(games, _bools(true, true, true));
+        assertEq(predictions.finalizableAt(roundId), lockTime + 4 hours);
+    }
+
     // --- finalizeRound & scoring -------------------------------------------------
 
     function test_FinalizeRoundScoresPicks() public {
@@ -364,7 +468,15 @@ contract PredictionsTest is M2Base {
         vm.expectRevert(abi.encodeWithSelector(Predictions.GameNotFinal.selector, games[2]));
         predictions.finalizeRound(roundId);
 
-        _record(_final(games[2], true)); // final right away: no waiting period
+        // Results are final right away; the round settles a full delay after the last one.
+        _record(_final(games[2], true));
+        uint64 readyAt = uint64(block.timestamp) + FINALIZATION_DELAY;
+        assertEq(predictions.finalizableAt(roundId), readyAt);
+        vm.warp(readyAt - 1);
+        vm.expectRevert(abi.encodeWithSelector(Predictions.FinalizationPending.selector, roundId, readyAt));
+        predictions.finalizeRound(roundId);
+
+        vm.warp(readyAt);
         vm.expectEmit(address(predictions));
         emit Predictions.RoundFinalized(roundId, uint64(1 | (2 << 2) | (1 << 4)), 3);
         vm.prank(stranger); // permissionless
@@ -390,9 +502,62 @@ contract PredictionsTest is M2Base {
         _record(_result(games[1], IResultsRegistry.GameStatus.Void, IResultsRegistry.Side.None, 0, 0));
         _record(_final(games[2], true));
 
-        predictions.finalizeRound(roundId);
+        _finalizeRound(roundId);
         assertEq(predictions.getRound(roundId).outcomes, 1);
         _assertScore(alice, 1, 1);
+    }
+
+    /// C1: once picks are locked no move can drop a game from the score, because a new tip-off
+    /// must be in the future and therefore after the lock.
+    function test_GameCannotBeDroppedAfterLock() public {
+        _submit(aliceKey, alice, roundId, _picks(H, A, H));
+        vm.warp(lockTime + 1);
+        vm.prank(operator);
+        vm.expectRevert(abi.encodeWithSelector(ResultsRegistry.TipOffInPast.selector, games[0], lockTime - 1));
+        registry.rescheduleGame(games[0], lockTime - 1);
+
+        // Postponing to a later date still works, and the game keeps counting.
+        vm.prank(operator);
+        registry.rescheduleGame(games[0], lockTime + 1 days);
+        vm.warp(lockTime + 1 days + 3 hours);
+        _settleGames(games, _bools(true, false, true));
+        _finalizeRound(roundId);
+        _assertScore(alice, 3, 3);
+    }
+
+    /// MAX_GAMES: a full 32-game round, the limit of the 2-bit packing in a uint64.
+    function test_ThirtyTwoGameRound() public {
+        uint64 lock = lockTime + 1 days;
+        bytes32[] memory g32 = _registerGames(32, lock);
+        bytes32 round32 = _scheduleRound(2, g32, opensAt, lock);
+
+        bytes memory picks = new bytes(32);
+        for (uint256 i = 0; i < 32; ++i) picks[i] = bytes1(i % 2 == 0 ? H : A);
+        _submit(aliceKey, alice, round32, picks);
+        (, , bytes memory stored) = predictions.getEntry(round32, alice);
+        assertEq(stored, picks);
+
+        // Home wins every game whose index is not a multiple of 3; the last game is void.
+        vm.warp(lock + 3 hours);
+        IResultsRegistry.ResultInput[] memory batch = new IResultsRegistry.ResultInput[](32);
+        uint8 expectedCorrect;
+        for (uint256 i = 0; i < 31; ++i) {
+            bool homeWins = i % 3 != 0;
+            batch[i] = _final(g32[i], homeWins);
+            if ((uint8(picks[i]) == H) == homeWins) ++expectedCorrect;
+        }
+        batch[31] = _result(g32[31], IResultsRegistry.GameStatus.Void, IResultsRegistry.Side.None, 0, 0);
+        vm.prank(resultsRelayer);
+        registry.recordResults(batch);
+        _finalizeRound(round32);
+
+        (uint8 correct, uint8 counted) = predictions.scoreOf(round32, alice);
+        assertEq(counted, 31);
+        assertEq(correct, expectedCorrect);
+        uint64 outcomes = predictions.getRound(round32).outcomes;
+        assertEq(outcomes >> 62, 0); // game 32 (void) in the top two bits
+        assertEq((outcomes >> 60) & 3, 2); // game 31 (index 30, a multiple of 3): away win
+        assertEq((outcomes >> 58) & 3, 1); // game 30 (index 29): home win
     }
 
     function test_ForfeitCounts() public {
@@ -401,7 +566,7 @@ contract PredictionsTest is M2Base {
         _record(_result(games[0], IResultsRegistry.GameStatus.Forfeit, IResultsRegistry.Side.Away, 0, 20));
         _record(_final(games[1], false));
         _record(_final(games[2], true));
-        predictions.finalizeRound(roundId);
+        _finalizeRound(roundId);
         _assertScore(alice, 2, 3);
     }
 
@@ -436,17 +601,17 @@ contract PredictionsTest is M2Base {
 
         vm.warp(lockTime + 3 hours);
         _settleGames(games, _bools(true, true, false)); // alice 2/3, bob 1/3
-        predictions.finalizeRound(roundId);
+        _finalizeRound(roundId);
 
         vm.warp(lockTime + 2 days + 3 hours);
         _settleGames(g2, _bools(true, false, true)); // alice 3/3
-        predictions.finalizeRound(round2);
+        _finalizeRound(round2);
 
+        vm.warp(lockTime + 4 days);
         for (uint256 i = 0; i < 3; ++i) {
             _record(_result(g3[i], IResultsRegistry.GameStatus.Void, IResultsRegistry.Side.None, 0, 0));
         }
-        vm.warp(lockTime + 4 days);
-        predictions.finalizeRound(round3);
+        _finalizeRound(round3);
 
         IPredictions.LeagueStats memory s = predictions.leagueStatsOf(LEAGUE, alice);
         assertEq(s.points, 5);
@@ -460,23 +625,44 @@ contract PredictionsTest is M2Base {
         assertEq(b.roundsPlayed, 1);
     }
 
-    function test_FinalizeLeagueIsWriteOnce() public {
+    function test_StandingsAreProposedThenFinalizedOnce() public {
         bytes32 root = keccak256("root");
         vm.prank(steward);
         vm.expectRevert(abi.encodeWithSelector(Predictions.RoundsPending.selector, LEAGUE));
-        predictions.finalizeLeague(LEAGUE, root, 10, keccak256("report"), "ipfs://report");
+        predictions.proposeStandings(LEAGUE, root, 10, keccak256("report"), "ipfs://report");
 
         _submit(aliceKey, alice, roundId, _picks(H, H, H));
         vm.warp(lockTime + 3 hours);
         _settleGames(games, _bools(true, true, true));
-        predictions.finalizeRound(roundId);
+        _finalizeRound(roundId);
 
-        vm.prank(steward);
+        vm.startPrank(steward);
+        vm.expectRevert(abi.encodeWithSelector(Predictions.NoStandingsProposal.selector, LEAGUE));
+        predictions.finalizeLeague(LEAGUE);
         vm.expectRevert(Predictions.InvalidStandings.selector);
-        predictions.finalizeLeague(LEAGUE, bytes32(0), 10, keccak256("report"), "ipfs://report");
+        predictions.proposeStandings(LEAGUE, bytes32(0), 10, keccak256("report"), "ipfs://report");
 
-        vm.prank(steward);
-        predictions.finalizeLeague(LEAGUE, root, 10, keccak256("report"), "ipfs://report");
+        uint64 proposedAt = uint64(block.timestamp);
+        uint64 finalizableAt = proposedAt + 48 hours;
+        vm.expectEmit(address(predictions));
+        emit Predictions.StandingsProposed(LEAGUE, root, 10, keccak256("report"), "ipfs://report", finalizableAt);
+        predictions.proposeStandings(LEAGUE, root, 10, keccak256("report"), "ipfs://report");
+        IPredictions.StandingsProposal memory p = predictions.getStandingsProposal(LEAGUE);
+        assertEq(p.standingsRoot, root);
+        assertEq(p.proposedAt, proposedAt);
+        assertEq(p.roundCount, 1);
+        assertFalse(predictions.getLeague(LEAGUE).finalized);
+
+        vm.warp(finalizableAt - 1);
+        vm.expectRevert(abi.encodeWithSelector(Predictions.ReviewPeriodOpen.selector, LEAGUE, finalizableAt));
+        predictions.finalizeLeague(LEAGUE);
+
+        vm.warp(finalizableAt);
+        vm.expectEmit(address(predictions));
+        emit Predictions.LeagueFinalized(LEAGUE, root, 10, keccak256("report"));
+        predictions.finalizeLeague(LEAGUE);
+        vm.stopPrank();
+
         IPredictions.League memory l = predictions.getLeague(LEAGUE);
         assertTrue(l.finalized);
         assertEq(l.standingsRoot, root);
@@ -494,20 +680,108 @@ contract PredictionsTest is M2Base {
             abi.encodeWithSelector(Predictions.LeagueNotActive.selector, LEAGUE)
         );
 
-        // The standings are anchored once: no second finalization, no replacement.
-        vm.warp(block.timestamp + 1 days);
-        vm.prank(steward);
+        // The standings are anchored once: no new proposal, no second finalization.
+        vm.startPrank(steward);
         vm.expectRevert(abi.encodeWithSelector(Predictions.LeagueNotActive.selector, LEAGUE));
-        predictions.finalizeLeague(LEAGUE, keccak256("root2"), 11, keccak256("report2"), "ipfs://report2");
+        predictions.proposeStandings(LEAGUE, keccak256("root2"), 11, keccak256("report2"), "ipfs://report2");
+        vm.expectRevert(abi.encodeWithSelector(Predictions.LeagueNotActive.selector, LEAGUE));
+        predictions.finalizeLeague(LEAGUE);
+        vm.stopPrank();
         assertEq(predictions.getLeague(LEAGUE).standingsRoot, root);
     }
 
-    function test_FinalizeLeagueNeedsAFinalizedRound() public {
+    /// A wrong proposal is replaced during the review; the replacement restarts the period.
+    function test_NewProposalReplacesAndRestartsTheReview() public {
+        vm.warp(lockTime + 3 hours);
+        _settleGames(games, _bools(true, true, true));
+        _finalizeRound(roundId);
+
+        vm.startPrank(steward);
+        predictions.proposeStandings(LEAGUE, keccak256("wrong"), 10, keccak256("report"), "ipfs://wrong");
+        vm.warp(block.timestamp + 47 hours);
+        predictions.proposeStandings(LEAGUE, keccak256("right"), 10, keccak256("report2"), "ipfs://right");
+        uint64 finalizableAt = uint64(block.timestamp) + 48 hours;
+
+        vm.warp(block.timestamp + 2 hours); // 49 h after the first proposal
+        vm.expectRevert(abi.encodeWithSelector(Predictions.ReviewPeriodOpen.selector, LEAGUE, finalizableAt));
+        predictions.finalizeLeague(LEAGUE);
+        vm.warp(finalizableAt);
+        predictions.finalizeLeague(LEAGUE);
+        vm.stopPrank();
+        assertEq(predictions.getLeague(LEAGUE).standingsRoot, keccak256("right"));
+        assertEq(predictions.getLeague(LEAGUE).reportHash, keccak256("report2"));
+    }
+
+    /// A round scheduled after the proposal is not in the proposed standings: they cannot be
+    /// finalized, even once that round is settled, until the steward proposes again.
+    function test_RoundAddedDuringReviewOutdatesTheProposal() public {
+        vm.warp(lockTime + 3 hours);
+        _settleGames(games, _bools(true, true, true));
+        _finalizeRound(roundId);
+        vm.prank(steward);
+        predictions.proposeStandings(LEAGUE, keccak256("root"), 10, bytes32(0), "");
+
+        uint64 lock2 = uint64(block.timestamp) + 1 hours;
+        bytes32[] memory more = _registerGames(1, lock2);
+        bytes32 round2 = _scheduleRound(2, more, uint64(block.timestamp), lock2);
+        vm.warp(lock2 + 3 hours);
+        _record(_final(more[0], true));
+        _finalizeRound(round2);
+        vm.warp(block.timestamp + 48 hours);
+
+        vm.startPrank(steward);
+        vm.expectRevert(abi.encodeWithSelector(Predictions.StandingsOutdated.selector, LEAGUE));
+        predictions.finalizeLeague(LEAGUE);
+        predictions.proposeStandings(LEAGUE, keccak256("root2"), 10, bytes32(0), "");
+        vm.warp(block.timestamp + 48 hours);
+        predictions.finalizeLeague(LEAGUE);
+        vm.stopPrank();
+        assertEq(predictions.getLeague(LEAGUE).standingsRoot, keccak256("root2"));
+    }
+
+    function test_ProposeStandingsNeedsAFinalizedRound() public {
         vm.prank(steward);
         predictions.cancelRound(roundId, "cancelled");
         vm.prank(steward);
         vm.expectRevert(abi.encodeWithSelector(Predictions.RoundsPending.selector, LEAGUE));
-        predictions.finalizeLeague(LEAGUE, keccak256("root"), 1, bytes32(0), "");
+        predictions.proposeStandings(LEAGUE, keccak256("root"), 1, bytes32(0), "");
+    }
+
+    /// Anyone can check a row against the proposed root during the review, then the anchored one.
+    function test_CheckStandingAgainstProposalThenAnchor() public {
+        (IPredictions.StandingLeaf memory a, IPredictions.StandingLeaf memory b) = _settleTwoPlayers();
+        (bool inTree, bool matchesChain) = predictions.checkStanding(LEAGUE, a, _proof(b));
+        assertFalse(inTree); // nothing proposed yet
+        assertTrue(matchesChain);
+
+        vm.prank(steward);
+        predictions.proposeStandings(LEAGUE, _root(a, b), 2, bytes32(0), "");
+        (inTree, matchesChain) = predictions.checkStanding(LEAGUE, a, _proof(b));
+        assertTrue(inTree && matchesChain);
+
+        vm.warp(block.timestamp + 48 hours);
+        vm.prank(steward);
+        predictions.finalizeLeague(LEAGUE);
+        (inTree, matchesChain) = predictions.checkStanding(LEAGUE, b, _proof(a));
+        assertTrue(inTree && matchesChain);
+
+        // A wrong proof, or another league's row, is not in the tree.
+        (inTree, ) = predictions.checkStanding(LEAGUE, a, _proof(a));
+        assertFalse(inTree);
+        IPredictions.StandingLeaf memory other = IPredictions.StandingLeaf(keccak256("other"), alice, 1, 2, 2, 3, 1, 1 hours);
+        (inTree, ) = predictions.checkStanding(LEAGUE, other, _proof(b));
+        assertFalse(inTree);
+    }
+
+    /// A row that is in the tree but disagrees with the chain is provably wrong.
+    function test_CheckStandingExposesAWrongRow() public {
+        (IPredictions.StandingLeaf memory a, ) = _settleTwoPlayers();
+        IPredictions.StandingLeaf memory inflated = IPredictions.StandingLeaf(LEAGUE, bob, 1, 3, 3, 3, 1, 1 hours);
+        vm.prank(steward);
+        predictions.proposeStandings(LEAGUE, _root(a, inflated), 2, bytes32(0), "");
+        (bool inTree, bool matchesChain) = predictions.checkStanding(LEAGUE, inflated, _proof(a));
+        assertTrue(inTree);
+        assertFalse(matchesChain);
     }
 
     // --- fuzz ----------------------------------------------------------------------
@@ -564,11 +838,42 @@ contract PredictionsTest is M2Base {
             ++expectedCounted;
             if (uint8(picks[i]) == (homeWins[i] ? H : A)) ++expectedCorrect;
         }
-        predictions.finalizeRound(roundId);
+        _finalizeRound(roundId);
         _assertScore(alice, expectedCorrect, expectedCounted);
     }
 
     // --- helpers -------------------------------------------------------------------
+
+    /// @dev OZ StandardMerkleTree leaf: keccak256(bytes.concat(keccak256(abi.encode(row)))).
+    function _leafHash(IPredictions.StandingLeaf memory leaf) internal pure returns (bytes32) {
+        return keccak256(bytes.concat(keccak256(abi.encode(leaf))));
+    }
+
+    /// @dev Root of a two-row StandardMerkleTree (sorted pair); a row's proof is the other's hash.
+    function _root(IPredictions.StandingLeaf memory x, IPredictions.StandingLeaf memory y) internal pure returns (bytes32) {
+        (bytes32 hx, bytes32 hy) = (_leafHash(x), _leafHash(y));
+        return hx < hy ? keccak256(abi.encode(hx, hy)) : keccak256(abi.encode(hy, hx));
+    }
+
+    function _proof(IPredictions.StandingLeaf memory sibling) internal pure returns (bytes32[] memory p) {
+        p = new bytes32[](1);
+        p[0] = _leafHash(sibling);
+    }
+
+    /// @dev alice 2/3 and bob 1/3 in round 1, both confirmed 1 h before the lock.
+    function _settleTwoPlayers()
+        internal
+        returns (IPredictions.StandingLeaf memory a, IPredictions.StandingLeaf memory b)
+    {
+        vm.warp(lockTime - 1 hours);
+        _submit(aliceKey, alice, roundId, _picks(H, H, H));
+        _submit(bobKey, bob, roundId, _picks(A, A, A));
+        vm.warp(lockTime + 3 hours);
+        _settleGames(games, _bools(true, true, false));
+        _finalizeRound(roundId);
+        a = IPredictions.StandingLeaf(LEAGUE, alice, 1, 2, 2, 3, 1, 1 hours);
+        b = IPredictions.StandingLeaf(LEAGUE, bob, 2, 1, 1, 3, 1, 1 hours);
+    }
 
     function _assertScore(address user, uint8 correct, uint8 counted) internal view {
         (uint8 c, uint8 n) = predictions.scoreOf(roundId, user);

@@ -17,8 +17,12 @@
     "vectors": "hardhat run scripts/gen-vectors.ts",
     "export-abi": "hardhat build && hardhat run scripts/export-abi.ts",
     "deploy:testnet": "hardhat ignition deploy ignition/modules/M2.ts --network injectiveTestnet --build-profile production --parameters ignition/parameters/testnet.json",
+    "deploy:mainnet": "hardhat ignition deploy ignition/modules/M2.ts --network injectiveMainnet --build-profile production --parameters ignition/parameters/mainnet.json",
+    "check-deploy:testnet": "M2_PARAMS=${M2_PARAMS:-ignition/parameters/testnet.json} hardhat run --network injectiveTestnet scripts/check-deploy.ts",
+    "check-deploy:mainnet": "M2_PARAMS=${M2_PARAMS:-ignition/parameters/mainnet.json} hardhat run --network injectiveMainnet scripts/check-deploy.ts",
     "node": "hardhat node",
-    "deploy:localhost": "hardhat ignition deploy ignition/modules/M2.ts --network localhost --parameters ignition/parameters/localhost.json --reset"
+    "deploy:localhost": "hardhat ignition deploy ignition/modules/M2.ts --network localhost --parameters ignition/parameters/localhost.json --reset",
+    "check-deploy:localhost": "M2_PARAMS=${M2_PARAMS:-ignition/parameters/localhost.json} hardhat run --network localhost scripts/check-deploy.ts"
   },
   "devDependencies": {
     "@nomicfoundation/hardhat-ignition": "^3.1.8",
