@@ -348,9 +348,40 @@ contract PredictionsTest is M2Base {
         predictions.updateRoundLock(roundId, lockTime - 30 minutes);
     }
 
-    /// C5: a lock moved earlier stays after every stored confirmedAt, so leagueStatsOf cannot
-    /// underflow on `lockTime - confirmedAt`.
+    /// A lock moved earlier is at least MIN_LOCK_NOTICE ahead: the submitter has that long to
+    /// land the picks already confirmed for the round.
+    function test_UpdateRoundLockNeedsNotice() public {
+        uint64 notice = predictions.MIN_LOCK_NOTICE();
+        uint64 now_ = uint64(block.timestamp);
+        vm.startPrank(operator);
+        vm.expectRevert(Predictions.InvalidSchedule.selector);
+        predictions.updateRoundLock(roundId, now_ + notice - 1);
+        predictions.updateRoundLock(roundId, now_ + notice);
+        vm.stopPrank();
+        assertEq(predictions.getRound(roundId).lockTime, now_ + notice);
+    }
+
+    /// The trade-off of MIN_LOCK_NOTICE: a game moved to start sooner than that cannot keep the lock
+    /// before it, so it does not count in the round. The other games and the stored picks do.
+    function test_GameMovedWithinNoticeDoesNotCount() public {
+        _submit(aliceKey, alice, roundId, _picks(H, A, H));
+        uint64 newStart = uint64(block.timestamp) + 10 minutes;
+        vm.prank(operator);
+        registry.rescheduleGame(games[0], newStart);
+        vm.prank(operator);
+        vm.expectRevert(Predictions.InvalidSchedule.selector);
+        predictions.updateRoundLock(roundId, newStart);
+
+        vm.warp(lockTime + 3 hours);
+        _settleGames(games, _bools(true, false, true));
+        _finalizeRound(roundId);
+        _assertScore(alice, 2, 2);
+    }
+
+    /// C5: a lock moved earlier stays after every stored confirmedAt (MIN_LOCK_NOTICE >
+    /// MAX_CLOCK_SKEW), so leagueStatsOf cannot underflow on `lockTime - confirmedAt`.
     function test_UpdateRoundLockStaysAfterSkewedConfirmations() public {
+        assertGt(predictions.MIN_LOCK_NOTICE(), predictions.MAX_CLOCK_SKEW());
         uint64 now_ = uint64(block.timestamp);
         Predictions.BatchItem memory skewed = _item(aliceKey, alice, roundId, _picks(H, A, H), now_ + 50);
         vm.prank(submitter);
@@ -359,16 +390,14 @@ contract PredictionsTest is M2Base {
         vm.startPrank(operator);
         vm.expectRevert(Predictions.InvalidSchedule.selector);
         predictions.updateRoundLock(roundId, now_ + 30); // the report's case: before confirmedAt
-        vm.expectRevert(Predictions.InvalidSchedule.selector);
-        predictions.updateRoundLock(roundId, now_ + 60);
-        predictions.updateRoundLock(roundId, now_ + 61);
+        predictions.updateRoundLock(roundId, now_ + predictions.MIN_LOCK_NOTICE());
         vm.stopPrank();
 
         vm.warp(lockTime + 3 hours);
         _settleGames(games, _bools(true, false, true));
         _finalizeRound(roundId);
         IPredictions.LeagueStats memory s = predictions.leagueStatsOf(LEAGUE, alice);
-        assertEq(s.sumLeadTime, 11);
+        assertEq(s.sumLeadTime, 15 minutes - 50);
         assertEq(s.points, 3);
     }
 

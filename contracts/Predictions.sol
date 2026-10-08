@@ -38,6 +38,7 @@ contract Predictions is IPredictions, AccessControlDefaultAdminRules, Pausable, 
     uint256 public constant MAX_ROUNDS_PER_LEAGUE = 64;
     uint256 public constant MAX_BATCH = 100;
     uint64 public constant MAX_CLOCK_SKEW = 60;
+    uint64 public constant MIN_LOCK_NOTICE = 15 minutes; // > MAX_CLOCK_SKEW, see updateRoundLock
     uint64 public constant MIN_FINALIZATION_DELAY = 1 hours;
     uint64 public constant MAX_FINALIZATION_DELAY = 7 days;
     uint64 public constant STANDINGS_REVIEW_PERIOD = 48 hours;
@@ -244,13 +245,16 @@ contract Predictions is IPredictions, AccessControlDefaultAdminRules, Pausable, 
     }
 
     /// @notice Move the lock of a round that has not locked yet (e.g. a game was moved earlier).
-    ///         The new lock is more than MAX_CLOCK_SKEW ahead, so it stays after every stored
+    ///         The new lock is at least MIN_LOCK_NOTICE ahead, so the submitter has time to land
+    ///         the picks already confirmed for the round. A game moved to start sooner than that
+    ///         cannot keep its round's lock before it, so it does not count in that round.
+    ///         As MIN_LOCK_NOTICE > MAX_CLOCK_SKEW, the lock also stays after every stored
     ///         `confirmedAt` (at most the block time + MAX_CLOCK_SKEW when it was accepted).
     function updateRoundLock(bytes32 roundId, uint64 newLockTime) external onlyRole(OPERATOR_ROLE) whenNotPaused {
         Round storage r = _rounds[roundId];
         if (r.state != RoundState.Scheduled) revert RoundNotActive(roundId);
         if (block.timestamp >= r.lockTime) revert RoundLocked(roundId);
-        if (newLockTime <= block.timestamp + MAX_CLOCK_SKEW || newLockTime <= r.opensAt) revert InvalidSchedule();
+        if (newLockTime < block.timestamp + MIN_LOCK_NOTICE || newLockTime <= r.opensAt) revert InvalidSchedule();
 
         bytes32[] storage gameIds = _roundGames[roundId];
         for (uint256 i = 0; i < gameIds.length; ++i) {

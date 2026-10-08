@@ -39,6 +39,9 @@ Key rules:
 - A game counts in a round only if it was `Final`/`Forfeit` and did not start before the lock.
   `rescheduleGame` only accepts a future start time, so once a round is locked no move can drop one
   of its games from the score.
+- `updateRoundLock` only moves a lock to at least `MIN_LOCK_NOTICE` (15 min) from now, so the
+  submitter has time to land the picks already confirmed for the round. The trade-off: a game moved
+  to start sooner than that cannot keep its round's lock before it, so it does not count there.
 - Home/away teams are registered with the fixture; `recordResults` rejects a swapped file.
 - **Results are final when recorded.** They come from an accredited institutional source (MSC,
   attested on LocalTruth), so there is no correction or challenge period: the first attested

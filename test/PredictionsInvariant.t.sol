@@ -118,8 +118,8 @@ contract PredictionsHandler is Test {
         registry.rescheduleGame(gameId, uint64(block.timestamp) - 1 days + uint64(offset % 3 days));
     }
 
-    /// The operator moves the lock of an open round to any future time not after its games,
-    /// within MAX_CLOCK_SKEW too: those moves must be rejected (C5).
+    /// The operator moves the lock of an open round to any future time not after its games, within
+    /// MIN_LOCK_NOTICE (hence within MAX_CLOCK_SKEW, C5) too: those moves must be rejected.
     function updateRoundLock(uint256 roundSeed, uint32 offset) external {
         bytes32 roundId = _round(roundSeed);
         Predictions.Round memory r = predictions.getRound(roundId);
