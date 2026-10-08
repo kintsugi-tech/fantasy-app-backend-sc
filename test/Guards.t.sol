@@ -123,10 +123,10 @@ contract GuardsTest is M2Base {
         assertEq(s.counted, 0);
     }
 
-    function test_RescheduleRejectsZeroTipOff() public {
+    function test_RescheduleRejectsZeroStartTime() public {
         bytes32 game = _registerGames(1, T0 + 1 days)[0];
         vm.prank(operator);
-        vm.expectRevert(abi.encodeWithSelector(ResultsRegistry.TipOffInPast.selector, game, uint64(0)));
+        vm.expectRevert(abi.encodeWithSelector(ResultsRegistry.StartTimeInPast.selector, game, uint64(0)));
         registry.rescheduleGame(game, 0);
     }
 
@@ -214,9 +214,9 @@ contract GuardsTest is M2Base {
     }
 
     function test_GameViewsForUnknownGame() public view {
-        (IResultsRegistry.GameStatus status, , uint64 tipOff, uint64 recordedAt) = registry.outcomeOf(keccak256("x"));
+        (IResultsRegistry.GameStatus status, , uint64 startTime, uint64 recordedAt) = registry.outcomeOf(keccak256("x"));
         assertEq(uint8(status), uint8(IResultsRegistry.GameStatus.None));
-        assertEq(tipOff, 0);
+        assertEq(startTime, 0);
         assertEq(recordedAt, 0);
     }
 }

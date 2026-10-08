@@ -59,14 +59,32 @@ abstract contract M2Base is Test {
         return keccak256(abi.encode("away", n));
     }
 
-    /// @dev Registers `count` new games, all tipping off at `tipOff`.
-    function _registerGames(uint256 count, uint64 tipOff) internal returns (bytes32[] memory ids) {
+    /// @dev Registers `count` new games starting at `startTime`, with an open score and no draws
+    ///      (basketball).
+    function _registerGames(uint256 count, uint64 startTime) internal returns (bytes32[] memory ids) {
+        return _registerGames(count, startTime, 0, false);
+    }
+
+    /// @dev Registers `count` new games starting at `startTime`, in the given format.
+    function _registerGames(
+        uint256 count,
+        uint64 startTime,
+        uint8 targetScore,
+        bool drawAllowed
+    ) internal returns (bytes32[] memory ids) {
         ids = new bytes32[](count);
         IResultsRegistry.GameInfo[] memory infos = new IResultsRegistry.GameInfo[](count);
         for (uint256 i = 0; i < count; ++i) {
             uint256 n = ++_nextGame;
             ids[i] = _gameId(n);
-            infos[i] = IResultsRegistry.GameInfo(ids[i], _homeTeam(n), _awayTeam(n), tipOff);
+            infos[i] = IResultsRegistry.GameInfo(
+                ids[i],
+                _homeTeam(n),
+                _awayTeam(n),
+                startTime,
+                targetScore,
+                drawAllowed
+            );
         }
         vm.prank(operator);
         registry.registerGames(infos);
@@ -105,17 +123,31 @@ abstract contract M2Base is Test {
             winner: winner,
             homeScore: homeScore,
             awayScore: awayScore,
-            overtimes: 0,
+            extraPeriods: 0,
             sourceHash: sha256(abi.encode(gameId, homeScore, awayScore)),
             attestationId: "mbl_2026_game-0001"
         });
     }
 
+    /// @dev A valid final result for the game's format: 88-80 / 75-91 with an open score,
+    ///      N-(N-1) / 0-N in a race to N sets.
     function _final(bytes32 gameId, bool homeWins) internal view returns (IResultsRegistry.ResultInput memory) {
+        uint16 target = registry.getGame(gameId).targetScore;
+        if (target != 0) {
+            return
+                homeWins
+                    ? _result(gameId, IResultsRegistry.GameStatus.Final, IResultsRegistry.Side.Home, target, target - 1)
+                    : _result(gameId, IResultsRegistry.GameStatus.Final, IResultsRegistry.Side.Away, 0, target);
+        }
         return
             homeWins
                 ? _result(gameId, IResultsRegistry.GameStatus.Final, IResultsRegistry.Side.Home, 88, 80)
                 : _result(gameId, IResultsRegistry.GameStatus.Final, IResultsRegistry.Side.Away, 75, 91);
+    }
+
+    /// @dev A 1-1 draw (valid only on games registered with `drawAllowed`).
+    function _draw(bytes32 gameId) internal view returns (IResultsRegistry.ResultInput memory) {
+        return _result(gameId, IResultsRegistry.GameStatus.Final, IResultsRegistry.Side.Draw, 1, 1);
     }
 
     function _record(IResultsRegistry.ResultInput memory r) internal {

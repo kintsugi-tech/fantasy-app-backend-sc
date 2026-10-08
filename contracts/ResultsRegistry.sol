@@ -7,15 +7,17 @@ import {Pausable} from "@openzeppelin/contracts/utils/Pausable.sol";
 import {IResultsRegistry} from "./interfaces/IResultsRegistry.sol";
 
 /// @title ResultsRegistry
-/// @notice Per-game results of the Mongolian basketball league, keyed by game so that one file per
-///         game or one file per matchday makes no difference.
+/// @notice Per-game results of the real-world competition, for any head-to-head sport (volleyball,
+///         basketball, football, tennis…), keyed by game so that one file per game or one file per
+///         matchday makes no difference. Each game is registered with its format (`targetScore`,
+///         `drawAllowed`), which is what a result is checked against.
 ///
 ///         Lifecycle of a game:
 ///           registerGames (operator)  ->  Scheduled
 ///           recordResults (relayer)   ->  Final | Forfeit | Void, final as soon as it is written
-///                                         (never before tip-off)
+///                                         (never before the start time)
 ///           voidGame (steward)        ->  Void, final (only when no result arrived within
-///                                         `postponeWindow` after tip-off)
+///                                         `postponeWindow` after the start time)
 ///
 ///         Results come from LocalTruth attestations of an accredited institutional source: the
 ///         relayer verifies that the public file's SHA-256 equals the attested `sha256_pub` and
@@ -35,7 +37,7 @@ contract ResultsRegistry is IResultsRegistry, AccessControlDefaultAdminRules, Pa
     uint64 public constant MAX_POSTPONE_WINDOW = 30 days;
     uint256 public constant MAX_ATTESTATION_ID_LENGTH = 128;
 
-    /// @notice Time after tip-off before a game without a result may be voided (default 7 days).
+    /// @notice Time after the start before a game without a result may be voided (default 7 days).
     uint64 public postponeWindow;
 
     mapping(bytes32 gameId => Game) private _games;
@@ -44,26 +46,33 @@ contract ResultsRegistry is IResultsRegistry, AccessControlDefaultAdminRules, Pa
     error EmptyBatch();
     error BatchTooLarge(uint256 size, uint256 max);
     error InvalidGameInfo(bytes32 gameId);
-    error TipOffInPast(bytes32 gameId, uint64 tipOff);
+    error StartTimeInPast(bytes32 gameId, uint64 startTime);
     error GameAlreadyRegistered(bytes32 gameId);
     error GameNotScheduled(bytes32 gameId);
     error ResultAlreadyRecorded(bytes32 gameId);
     error TeamsMismatch(bytes32 gameId);
     error InvalidResult(bytes32 gameId);
     error InvalidSource(bytes32 gameId);
-    error BeforeTipOff(bytes32 gameId);
+    error BeforeStart(bytes32 gameId);
     error PostponeWindowOpen(bytes32 gameId, uint64 voidableAt);
     error DelayOutOfRange(uint64 value);
 
-    event GameRegistered(bytes32 indexed gameId, bytes32 homeTeam, bytes32 awayTeam, uint64 tipOff);
-    event GameRescheduled(bytes32 indexed gameId, uint64 oldTipOff, uint64 newTipOff);
+    event GameRegistered(
+        bytes32 indexed gameId,
+        bytes32 homeTeam,
+        bytes32 awayTeam,
+        uint64 startTime,
+        uint8 targetScore,
+        bool drawAllowed
+    );
+    event GameRescheduled(bytes32 indexed gameId, uint64 oldStartTime, uint64 newStartTime);
     event ResultRecorded(
         bytes32 indexed gameId,
         GameStatus status,
         Side winner,
         uint16 homeScore,
         uint16 awayScore,
-        uint8 overtimes,
+        uint8 extraPeriods,
         bytes32 sourceHash,
         string attestationId
     );
@@ -100,30 +109,41 @@ contract ResultsRegistry is IResultsRegistry, AccessControlDefaultAdminRules, Pa
                 info.homeTeam == bytes32(0) ||
                 info.awayTeam == bytes32(0) ||
                 info.homeTeam == info.awayTeam ||
-                info.tipOff == 0
+                info.startTime == 0 ||
+                (info.targetScore != 0 && info.drawAllowed) // a race to N sets has no draws
             ) revert InvalidGameInfo(info.gameId);
+            /// @dev check if the game is already registered
             Game storage g = _games[info.gameId];
             if (g.status != GameStatus.None) revert GameAlreadyRegistered(info.gameId);
 
             g.homeTeam = info.homeTeam;
             g.awayTeam = info.awayTeam;
-            g.tipOff = info.tipOff;
+            g.startTime = info.startTime;
+            g.targetScore = info.targetScore;
+            g.drawAllowed = info.drawAllowed;
             g.status = GameStatus.Scheduled;
-            emit GameRegistered(info.gameId, info.homeTeam, info.awayTeam, info.tipOff);
+            emit GameRegistered(
+                info.gameId,
+                info.homeTeam,
+                info.awayTeam,
+                info.startTime,
+                info.targetScore,
+                info.drawAllowed
+            );
         }
     }
 
     /// @notice Move a game that has no result yet to a future time. Rounds whose lock is past a
-    ///         game's new tip-off will not count that game (see Predictions.finalizeRound). As the
-    ///         new tip-off must be in the future, that can happen only before the round locks: once
-    ///         picks are locked, no move can drop a game from the score.
-    function rescheduleGame(bytes32 gameId, uint64 newTipOff) external onlyRole(OPERATOR_ROLE) whenNotPaused {
+    ///         game's new start time will not count that game (see Predictions.finalizeRound). As
+    ///         the new start time must be in the future, that can happen only before the round
+    ///         locks: once picks are locked, no move can drop a game from the score.
+    function rescheduleGame(bytes32 gameId, uint64 newStartTime) external onlyRole(OPERATOR_ROLE) whenNotPaused {
         Game storage g = _games[gameId];
         if (g.status != GameStatus.Scheduled) revert GameNotScheduled(gameId);
-        if (newTipOff <= block.timestamp) revert TipOffInPast(gameId, newTipOff);
-        uint64 old = g.tipOff;
-        g.tipOff = newTipOff;
-        emit GameRescheduled(gameId, old, newTipOff);
+        if (newStartTime <= block.timestamp) revert StartTimeInPast(gameId, newStartTime);
+        uint64 old = g.startTime;
+        g.startTime = newStartTime;
+        emit GameRescheduled(gameId, old, newStartTime);
     }
 
     // ---------------------------------------------------------------------
@@ -150,7 +170,7 @@ contract ResultsRegistry is IResultsRegistry, AccessControlDefaultAdminRules, Pa
                 r.winner,
                 r.homeScore,
                 r.awayScore,
-                r.overtimes,
+                r.extraPeriods,
                 r.sourceHash,
                 r.attestationId
             );
@@ -161,11 +181,11 @@ contract ResultsRegistry is IResultsRegistry, AccessControlDefaultAdminRules, Pa
     // Steward: discretionary actions
     // ---------------------------------------------------------------------
 
-    /// @notice Void a game that got no result within `postponeWindow` after tip-off. Final.
+    /// @notice Void a game that got no result within `postponeWindow` after its start. Final.
     function voidGame(bytes32 gameId, string calldata reason) external onlyRole(STEWARD_ROLE) whenNotPaused {
         Game storage g = _games[gameId];
         if (g.status != GameStatus.Scheduled) revert GameNotScheduled(gameId);
-        uint64 voidableAt = g.tipOff + postponeWindow;
+        uint64 voidableAt = g.startTime + postponeWindow;
         if (block.timestamp <= voidableAt) revert PostponeWindowOpen(gameId, voidableAt);
 
         g.status = GameStatus.Void;
@@ -206,9 +226,9 @@ contract ResultsRegistry is IResultsRegistry, AccessControlDefaultAdminRules, Pa
 
     function outcomeOf(
         bytes32 gameId
-    ) external view returns (GameStatus status, Side winner, uint64 tipOff, uint64 recordedAt) {
+    ) external view returns (GameStatus status, Side winner, uint64 startTime, uint64 recordedAt) {
         Game storage g = _games[gameId];
-        return (g.status, g.winner, g.tipOff, g.recordedAt);
+        return (g.status, g.winner, g.startTime, g.recordedAt);
     }
 
     // ---------------------------------------------------------------------
@@ -217,11 +237,11 @@ contract ResultsRegistry is IResultsRegistry, AccessControlDefaultAdminRules, Pa
 
     function _writeResult(Game storage g, ResultInput calldata r) private {
         if (r.homeTeam != g.homeTeam || r.awayTeam != g.awayTeam) revert TeamsMismatch(r.gameId);
-        _validateResult(r);
-        // No result before tip-off, whatever the status. A game cancelled in advance is recorded as
-        // Void once its tip-off has passed: an early Void would let the automated key void any
-        // future fixture, while the steward has to wait `postponeWindow` for the same.
-        if (block.timestamp < g.tipOff) revert BeforeTipOff(r.gameId);
+        _validateResult(g, r);
+        // No result before the start, whatever the status. A game cancelled in advance is recorded
+        // as Void once its start time has passed: an early Void would let the automated key void
+        // any future fixture, while the steward has to wait `postponeWindow` for the same.
+        if (block.timestamp < g.startTime) revert BeforeStart(r.gameId);
         uint256 idLength = bytes(r.attestationId).length;
         if (r.sourceHash == bytes32(0) || idLength == 0 || idLength > MAX_ATTESTATION_ID_LENGTH) {
             revert InvalidSource(r.gameId);
@@ -231,27 +251,38 @@ contract ResultsRegistry is IResultsRegistry, AccessControlDefaultAdminRules, Pa
         g.winner = r.winner;
         g.homeScore = r.homeScore;
         g.awayScore = r.awayScore;
-        g.overtimes = r.overtimes;
+        g.extraPeriods = r.extraPeriods;
         g.sourceHash = r.sourceHash; // the attestation id lives in the ResultRecorded event
         g.recordedAt = uint64(block.timestamp);
     }
 
-    /// @dev Catches parser bugs: the stored result must be internally consistent.
-    function _validateResult(ResultInput calldata r) private pure {
+    /// @dev Catches parser bugs: the stored result must be consistent with the game's format.
+    function _validateResult(Game storage g, ResultInput calldata r) private view {
         bool ok = false; // any other status stays invalid
+        uint8 target = g.targetScore;
         if (r.status == GameStatus.Final) {
-            // No draws in basketball; the winner is the side with more points.
-            ok =
-                r.homeScore != r.awayScore &&
-                r.winner == (r.homeScore > r.awayScore ? Side.Home : Side.Away);
+            if (r.homeScore == r.awayScore) {
+                ok = r.winner == Side.Draw && g.drawAllowed;
+            } else {
+                // The winner is the side ahead; in a race to N sets it reached N, with no extra periods.
+                bool homeLeads = r.homeScore > r.awayScore;
+                uint16 winnerScore = homeLeads ? r.homeScore : r.awayScore;
+                ok =
+                    r.winner == (homeLeads ? Side.Home : Side.Away) &&
+                    (target == 0 || (winnerScore == target && r.extraPeriods == 0));
+            }
         } else if (r.status == GameStatus.Forfeit) {
+            // Forfeited before the start (no score) or during the game with the winner ahead.
             bool noScore = r.homeScore == 0 && r.awayScore == 0;
-            bool winnerLeads = r.winner == Side.Home
-                ? r.homeScore > r.awayScore
-                : r.awayScore > r.homeScore;
-            ok = r.winner != Side.None && r.overtimes == 0 && (noScore || winnerLeads);
+            bool winnerLeads = (r.winner == Side.Home && r.homeScore > r.awayScore) ||
+                (r.winner == Side.Away && r.awayScore > r.homeScore);
+            ok =
+                (r.winner == Side.Home || r.winner == Side.Away) &&
+                r.extraPeriods == 0 &&
+                (noScore || winnerLeads) &&
+                (target == 0 || (r.homeScore <= target && r.awayScore <= target));
         } else if (r.status == GameStatus.Void) {
-            ok = r.winner == Side.None && r.homeScore == 0 && r.awayScore == 0 && r.overtimes == 0;
+            ok = r.winner == Side.None && r.homeScore == 0 && r.awayScore == 0 && r.extraPeriods == 0;
         }
         if (!ok) revert InvalidResult(r.gameId);
     }

@@ -62,7 +62,7 @@ contract VectorsTest is Test {
             )
         );
 
-        for (uint256 i = 0; i < 2; ++i) {
+        for (uint256 i = 0; i < 3; ++i) {
             string memory base = string.concat(".submissions[", vm.toString(i), "]");
             address user = vm.parseJsonAddress(json, string.concat(base, ".user"));
             bytes memory picks = vm.parseJsonBytes(json, string.concat(base, ".picks"));
@@ -88,7 +88,7 @@ contract VectorsTest is Test {
     function test_StandingsProofs() public view {
         bytes32 leagueId = vm.parseJsonBytes32(json, ".league.leagueId");
         bytes32 root = vm.parseJsonBytes32(json, ".standings.root");
-        for (uint256 i = 0; i < 2; ++i) {
+        for (uint256 i = 0; i < 3; ++i) {
             string memory base = string.concat(".standings.leaves[", vm.toString(i), "]");
             IPredictions.StandingLeaf memory row = IPredictions.StandingLeaf({
                 leagueId: leagueId,

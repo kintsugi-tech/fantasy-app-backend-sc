@@ -10,12 +10,12 @@ import {M2Base} from "./utils/M2Base.sol";
 
 contract ResultsRegistryTest is M2Base {
     bytes32 internal game;
-    uint64 internal tipOff;
+    uint64 internal startTime;
 
     function setUp() public override {
         super.setUp();
-        tipOff = T0 + 1 days;
-        game = _registerGames(1, tipOff)[0];
+        startTime = T0 + 1 days;
+        game = _registerGames(1, startTime)[0];
     }
 
     // --- registerGames ---------------------------------------------------------
@@ -25,14 +25,33 @@ contract ResultsRegistryTest is M2Base {
         assertEq(uint8(g.status), uint8(IResultsRegistry.GameStatus.Scheduled));
         assertEq(g.homeTeam, _homeTeam(1));
         assertEq(g.awayTeam, _awayTeam(1));
-        assertEq(g.tipOff, tipOff);
+        assertEq(g.startTime, startTime);
+        assertEq(g.targetScore, 0);
+        assertFalse(g.drawAllowed);
         assertEq(g.recordedAt, 0);
         assertFalse(registry.isFinal(game));
     }
 
+    function test_RegisterStoresFormat() public {
+        IResultsRegistry.GameInfo[] memory infos = new IResultsRegistry.GameInfo[](2);
+        infos[0] = IResultsRegistry.GameInfo(_gameId(901), _homeTeam(901), _awayTeam(901), startTime, 3, false);
+        infos[1] = IResultsRegistry.GameInfo(_gameId(902), _homeTeam(902), _awayTeam(902), startTime, 0, true);
+        vm.expectEmit(address(registry));
+        emit ResultsRegistry.GameRegistered(_gameId(901), _homeTeam(901), _awayTeam(901), startTime, 3, false);
+        vm.prank(operator);
+        registry.registerGames(infos);
+
+        IResultsRegistry.Game memory volleyball = registry.getGame(_gameId(901));
+        assertEq(volleyball.targetScore, 3);
+        assertFalse(volleyball.drawAllowed);
+        IResultsRegistry.Game memory football = registry.getGame(_gameId(902));
+        assertEq(football.targetScore, 0);
+        assertTrue(football.drawAllowed);
+    }
+
     function test_RegisterIsWriteOnce() public {
         IResultsRegistry.GameInfo[] memory infos = new IResultsRegistry.GameInfo[](1);
-        infos[0] = IResultsRegistry.GameInfo(game, _homeTeam(9), _awayTeam(9), tipOff);
+        infos[0] = IResultsRegistry.GameInfo(game, _homeTeam(9), _awayTeam(9), startTime, 0, false);
         vm.prank(operator);
         vm.expectRevert(abi.encodeWithSelector(ResultsRegistry.GameAlreadyRegistered.selector, game));
         registry.registerGames(infos);
@@ -42,19 +61,25 @@ contract ResultsRegistryTest is M2Base {
         IResultsRegistry.GameInfo[] memory infos = new IResultsRegistry.GameInfo[](1);
         bytes32 id = _gameId(999);
 
-        infos[0] = IResultsRegistry.GameInfo(id, _homeTeam(1), _homeTeam(1), tipOff); // same teams
+        infos[0] = IResultsRegistry.GameInfo(id, _homeTeam(1), _homeTeam(1), startTime, 0, false); // same teams
         vm.prank(operator);
         vm.expectRevert(abi.encodeWithSelector(ResultsRegistry.InvalidGameInfo.selector, id));
         registry.registerGames(infos);
 
-        infos[0] = IResultsRegistry.GameInfo(id, _homeTeam(1), _awayTeam(1), 0); // no tip-off
+        infos[0] = IResultsRegistry.GameInfo(id, _homeTeam(1), _awayTeam(1), 0, 0, false); // no start time
         vm.prank(operator);
         vm.expectRevert(abi.encodeWithSelector(ResultsRegistry.InvalidGameInfo.selector, id));
         registry.registerGames(infos);
 
-        infos[0] = IResultsRegistry.GameInfo(bytes32(0), _homeTeam(1), _awayTeam(1), tipOff);
+        infos[0] = IResultsRegistry.GameInfo(bytes32(0), _homeTeam(1), _awayTeam(1), startTime, 0, false);
         vm.prank(operator);
         vm.expectRevert(abi.encodeWithSelector(ResultsRegistry.InvalidGameInfo.selector, bytes32(0)));
+        registry.registerGames(infos);
+
+        // A race to N sets cannot end in a draw.
+        infos[0] = IResultsRegistry.GameInfo(id, _homeTeam(1), _awayTeam(1), startTime, 3, true);
+        vm.prank(operator);
+        vm.expectRevert(abi.encodeWithSelector(ResultsRegistry.InvalidGameInfo.selector, id));
         registry.registerGames(infos);
     }
 
@@ -89,36 +114,36 @@ contract ResultsRegistryTest is M2Base {
         assertFalse(registry.hasRole(registry.STEWARD_ROLE(), address(this)));
     }
 
-    function test_RescheduleRejectsPastTipOff() public {
+    function test_RescheduleRejectsPastStartTime() public {
         vm.warp(T0 + 1 hours);
         vm.startPrank(operator);
-        vm.expectRevert(abi.encodeWithSelector(ResultsRegistry.TipOffInPast.selector, game, uint64(T0)));
+        vm.expectRevert(abi.encodeWithSelector(ResultsRegistry.StartTimeInPast.selector, game, uint64(T0)));
         registry.rescheduleGame(game, T0);
         vm.expectRevert(
-            abi.encodeWithSelector(ResultsRegistry.TipOffInPast.selector, game, uint64(block.timestamp))
+            abi.encodeWithSelector(ResultsRegistry.StartTimeInPast.selector, game, uint64(block.timestamp))
         );
         registry.rescheduleGame(game, uint64(block.timestamp));
         registry.rescheduleGame(game, uint64(block.timestamp) + 1);
         vm.stopPrank();
-        assertEq(registry.getGame(game).tipOff, block.timestamp + 1);
+        assertEq(registry.getGame(game).startTime, block.timestamp + 1);
     }
 
     function test_RescheduleOnlyWithoutResult() public {
         vm.prank(operator);
-        registry.rescheduleGame(game, tipOff + 1 hours);
-        assertEq(registry.getGame(game).tipOff, tipOff + 1 hours);
+        registry.rescheduleGame(game, startTime + 1 hours);
+        assertEq(registry.getGame(game).startTime, startTime + 1 hours);
 
-        vm.warp(tipOff + 3 hours);
+        vm.warp(startTime + 3 hours);
         _record(_final(game, true));
         vm.prank(operator);
         vm.expectRevert(abi.encodeWithSelector(ResultsRegistry.GameNotScheduled.selector, game));
-        registry.rescheduleGame(game, tipOff + 5 hours);
+        registry.rescheduleGame(game, startTime + 5 hours);
     }
 
     // --- recordResults ---------------------------------------------------------
 
     function test_RecordFinalResult() public {
-        vm.warp(tipOff + 2 hours);
+        vm.warp(startTime + 2 hours);
         IResultsRegistry.ResultInput memory r = _final(game, false);
         vm.expectEmit(address(registry));
         emit ResultsRegistry.ResultRecorded(
@@ -141,17 +166,17 @@ contract ResultsRegistryTest is M2Base {
         assertTrue(registry.isFinal(game)); // final as soon as it is written
     }
 
-    function test_RecordOvertimeResult() public {
-        vm.warp(tipOff + 3 hours);
+    function test_RecordExtraPeriods() public {
+        vm.warp(startTime + 3 hours);
         IResultsRegistry.ResultInput memory r = _final(game, true);
-        r.overtimes = 2;
+        r.extraPeriods = 2;
         _record(r);
-        assertEq(registry.getGame(game).overtimes, 2);
+        assertEq(registry.getGame(game).extraPeriods, 2);
     }
 
-    function test_RecordRejectsResultBeforeTipOff() public {
+    function test_RecordRejectsResultBeforeStart() public {
         IResultsRegistry.ResultInput memory played = _final(game, true);
-        vm.expectRevert(abi.encodeWithSelector(ResultsRegistry.BeforeTipOff.selector, game));
+        vm.expectRevert(abi.encodeWithSelector(ResultsRegistry.BeforeStart.selector, game));
         this.recordAsRelayer(played);
 
         IResultsRegistry.ResultInput memory forfeit = _result(
@@ -161,11 +186,11 @@ contract ResultsRegistryTest is M2Base {
             20,
             0
         );
-        vm.expectRevert(abi.encodeWithSelector(ResultsRegistry.BeforeTipOff.selector, game));
+        vm.expectRevert(abi.encodeWithSelector(ResultsRegistry.BeforeStart.selector, game));
         this.recordAsRelayer(forfeit);
     }
 
-    function test_RecordVoidOnlyFromTipOff() public {
+    function test_RecordVoidOnlyFromStart() public {
         IResultsRegistry.ResultInput memory void_ = _result(
             game,
             IResultsRegistry.GameStatus.Void,
@@ -173,17 +198,17 @@ contract ResultsRegistryTest is M2Base {
             0,
             0
         );
-        vm.warp(tipOff - 1);
-        vm.expectRevert(abi.encodeWithSelector(ResultsRegistry.BeforeTipOff.selector, game));
+        vm.warp(startTime - 1);
+        vm.expectRevert(abi.encodeWithSelector(ResultsRegistry.BeforeStart.selector, game));
         this.recordAsRelayer(void_);
 
-        vm.warp(tipOff);
+        vm.warp(startTime);
         _record(void_);
         assertEq(uint8(registry.getGame(game).status), uint8(IResultsRegistry.GameStatus.Void));
     }
 
     function test_RecordRejectsSwappedTeams() public {
-        vm.warp(tipOff + 2 hours);
+        vm.warp(startTime + 2 hours);
         IResultsRegistry.ResultInput memory r = _final(game, true);
         (r.homeTeam, r.awayTeam) = (r.awayTeam, r.homeTeam);
         vm.expectRevert(abi.encodeWithSelector(ResultsRegistry.TeamsMismatch.selector, game));
@@ -191,21 +216,30 @@ contract ResultsRegistryTest is M2Base {
     }
 
     function test_RecordRejectsInconsistentResults() public {
-        vm.warp(tipOff + 2 hours);
+        vm.warp(startTime + 2 hours);
         IResultsRegistry.ResultInput memory r;
 
         r = _result(game, IResultsRegistry.GameStatus.Final, IResultsRegistry.Side.Home, 80, 80); // draw
+        _expectInvalid(r);
+        r = _result(game, IResultsRegistry.GameStatus.Final, IResultsRegistry.Side.Draw, 80, 80); // no draws here
         _expectInvalid(r);
         r = _result(game, IResultsRegistry.GameStatus.Final, IResultsRegistry.Side.Home, 70, 80); // wrong winner
         _expectInvalid(r);
         r = _result(game, IResultsRegistry.GameStatus.Final, IResultsRegistry.Side.None, 90, 80);
         _expectInvalid(r);
+        r = _result(game, IResultsRegistry.GameStatus.Final, IResultsRegistry.Side.Draw, 90, 80);
+        _expectInvalid(r);
         r = _result(game, IResultsRegistry.GameStatus.Forfeit, IResultsRegistry.Side.None, 0, 0);
+        _expectInvalid(r);
+        r = _result(game, IResultsRegistry.GameStatus.Forfeit, IResultsRegistry.Side.Draw, 0, 0);
+        _expectInvalid(r);
+        // A forfeit has a winner: Draw must not pass as Away when Away is ahead.
+        r = _result(game, IResultsRegistry.GameStatus.Forfeit, IResultsRegistry.Side.Draw, 0, 20);
         _expectInvalid(r);
         r = _result(game, IResultsRegistry.GameStatus.Forfeit, IResultsRegistry.Side.Away, 20, 0);
         _expectInvalid(r);
         r = _result(game, IResultsRegistry.GameStatus.Forfeit, IResultsRegistry.Side.Home, 20, 0);
-        r.overtimes = 1;
+        r.extraPeriods = 1;
         _expectInvalid(r);
         r = _result(game, IResultsRegistry.GameStatus.Void, IResultsRegistry.Side.Home, 0, 0);
         _expectInvalid(r);
@@ -216,13 +250,80 @@ contract ResultsRegistryTest is M2Base {
     }
 
     function test_RecordForfeitWithoutScore() public {
-        vm.warp(tipOff);
+        vm.warp(startTime);
         _record(_result(game, IResultsRegistry.GameStatus.Forfeit, IResultsRegistry.Side.Away, 0, 0));
         assertEq(uint8(registry.getGame(game).winner), uint8(IResultsRegistry.Side.Away));
     }
 
+    // --- formats ---------------------------------------------------------------
+
+    /// Volleyball (best of 5): the scores are sets and the winner has exactly 3.
+    function test_VolleyballResults() public {
+        bytes32[] memory ids = _registerGames(5, startTime, 3, false);
+        vm.warp(startTime + 2 hours);
+        _record(_result(ids[0], IResultsRegistry.GameStatus.Final, IResultsRegistry.Side.Home, 3, 0));
+        _record(_result(ids[1], IResultsRegistry.GameStatus.Final, IResultsRegistry.Side.Away, 1, 3));
+        _record(_result(ids[2], IResultsRegistry.GameStatus.Final, IResultsRegistry.Side.Home, 3, 2));
+        _record(_result(ids[3], IResultsRegistry.GameStatus.Forfeit, IResultsRegistry.Side.Home, 3, 0));
+        _record(_result(ids[4], IResultsRegistry.GameStatus.Forfeit, IResultsRegistry.Side.Away, 0, 0));
+        IResultsRegistry.Game memory g = registry.getGame(ids[2]);
+        assertEq(uint8(g.winner), uint8(IResultsRegistry.Side.Home));
+        assertEq(g.homeScore, 3);
+        assertEq(g.awayScore, 2);
+    }
+
+    function test_VolleyballRejectsInconsistentResults() public {
+        bytes32 id = _registerGames(1, startTime, 3, false)[0];
+        vm.warp(startTime + 2 hours);
+        IResultsRegistry.ResultInput memory r;
+
+        r = _result(id, IResultsRegistry.GameStatus.Final, IResultsRegistry.Side.Home, 2, 1); // not over
+        _expectInvalid(r);
+        r = _result(id, IResultsRegistry.GameStatus.Final, IResultsRegistry.Side.Home, 4, 1); // past the target
+        _expectInvalid(r);
+        r = _result(id, IResultsRegistry.GameStatus.Final, IResultsRegistry.Side.Home, 3, 3);
+        _expectInvalid(r);
+        r = _result(id, IResultsRegistry.GameStatus.Final, IResultsRegistry.Side.Draw, 3, 3);
+        _expectInvalid(r);
+        r = _result(id, IResultsRegistry.GameStatus.Final, IResultsRegistry.Side.Home, 1, 3); // wrong winner
+        _expectInvalid(r);
+        r = _result(id, IResultsRegistry.GameStatus.Final, IResultsRegistry.Side.Home, 3, 1);
+        r.extraPeriods = 1; // a fifth set is a set, not an extra period
+        _expectInvalid(r);
+        r = _result(id, IResultsRegistry.GameStatus.Forfeit, IResultsRegistry.Side.Home, 4, 0);
+        _expectInvalid(r);
+        r = _result(id, IResultsRegistry.GameStatus.Forfeit, IResultsRegistry.Side.Draw, 0, 0);
+        _expectInvalid(r);
+
+        _record(_result(id, IResultsRegistry.GameStatus.Final, IResultsRegistry.Side.Home, 3, 1));
+        assertTrue(registry.isFinal(id));
+    }
+
+    /// Football league match: the scores are goals and a level score is a draw.
+    function test_FootballDraws() public {
+        bytes32[] memory ids = _registerGames(3, startTime, 0, true);
+        vm.warp(startTime + 2 hours);
+        IResultsRegistry.ResultInput memory r;
+
+        r = _result(ids[0], IResultsRegistry.GameStatus.Final, IResultsRegistry.Side.Home, 1, 1);
+        _expectInvalid(r);
+        r = _result(ids[0], IResultsRegistry.GameStatus.Final, IResultsRegistry.Side.None, 1, 1);
+        _expectInvalid(r);
+        r = _result(ids[0], IResultsRegistry.GameStatus.Final, IResultsRegistry.Side.Draw, 2, 1);
+        _expectInvalid(r);
+        r = _result(ids[0], IResultsRegistry.GameStatus.Forfeit, IResultsRegistry.Side.Draw, 0, 0);
+        _expectInvalid(r);
+
+        _record(_draw(ids[0]));
+        _record(_result(ids[1], IResultsRegistry.GameStatus.Final, IResultsRegistry.Side.Draw, 0, 0));
+        _record(_result(ids[2], IResultsRegistry.GameStatus.Final, IResultsRegistry.Side.Home, 2, 1));
+        (IResultsRegistry.GameStatus status, IResultsRegistry.Side winner, , ) = registry.outcomeOf(ids[0]);
+        assertEq(uint8(status), uint8(IResultsRegistry.GameStatus.Final));
+        assertEq(uint8(winner), uint8(IResultsRegistry.Side.Draw));
+    }
+
     function test_RecordRejectsMissingSource() public {
-        vm.warp(tipOff + 2 hours);
+        vm.warp(startTime + 2 hours);
         IResultsRegistry.ResultInput memory r = _final(game, true);
         r.sourceHash = bytes32(0);
         vm.expectRevert(abi.encodeWithSelector(ResultsRegistry.InvalidSource.selector, game));
@@ -235,7 +336,7 @@ contract ResultsRegistryTest is M2Base {
     }
 
     function test_RecordIsWriteOnce() public {
-        vm.warp(tipOff + 2 hours);
+        vm.warp(startTime + 2 hours);
         _record(_final(game, true));
         vm.warp(block.timestamp + 30 days);
         IResultsRegistry.ResultInput memory again = _final(game, false);
@@ -246,7 +347,7 @@ contract ResultsRegistryTest is M2Base {
     }
 
     function test_RecordRejectsUnknownGame() public {
-        vm.warp(tipOff + 2 hours);
+        vm.warp(startTime + 2 hours);
         IResultsRegistry.ResultInput memory r = _final(game, true);
         r.gameId = _gameId(777);
         vm.expectRevert(abi.encodeWithSelector(ResultsRegistry.GameNotScheduled.selector, r.gameId));
@@ -254,7 +355,7 @@ contract ResultsRegistryTest is M2Base {
     }
 
     function test_RecordOnlyRelayerAndNotPaused() public {
-        vm.warp(tipOff + 2 hours);
+        vm.warp(startTime + 2 hours);
         IResultsRegistry.ResultInput[] memory batch = new IResultsRegistry.ResultInput[](1);
         batch[0] = _final(game, true);
         bytes32 role = registry.RESULTS_RELAYER_ROLE();
@@ -312,9 +413,9 @@ contract ResultsRegistryTest is M2Base {
 
         vm.prank(operator);
         vm.expectRevert(Pausable.EnforcedPause.selector);
-        registry.rescheduleGame(game, tipOff + 1 hours);
+        registry.rescheduleGame(game, startTime + 1 hours);
 
-        vm.warp(tipOff + POSTPONE + 1);
+        vm.warp(startTime + POSTPONE + 1);
         IResultsRegistry.ResultInput memory r = _final(game, true);
         vm.expectRevert(Pausable.EnforcedPause.selector);
         this.recordAsRelayer(r);
@@ -328,14 +429,14 @@ contract ResultsRegistryTest is M2Base {
         registry.setPostponeWindow(2 days);
         vm.stopPrank();
         assertFalse(registry.hasRole(registry.RESULTS_RELAYER_ROLE(), resultsRelayer));
-        assertEq(registry.getGame(game).tipOff, tipOff);
+        assertEq(registry.getGame(game).startTime, startTime);
         assertFalse(registry.isFinal(game));
     }
 
     // --- voidGame --------------------------------------------------------------
 
     function test_VoidAfterPostponeWindow() public {
-        uint64 voidableAt = tipOff + POSTPONE;
+        uint64 voidableAt = startTime + POSTPONE;
         vm.warp(voidableAt);
         vm.prank(steward);
         vm.expectRevert(abi.encodeWithSelector(ResultsRegistry.PostponeWindowOpen.selector, game, voidableAt));
@@ -350,7 +451,7 @@ contract ResultsRegistryTest is M2Base {
     }
 
     function test_VoidOnlySteward() public {
-        vm.warp(tipOff + POSTPONE + 1);
+        vm.warp(startTime + POSTPONE + 1);
         bytes32 role = registry.STEWARD_ROLE();
         vm.prank(resultsRelayer);
         vm.expectRevert(
@@ -360,9 +461,9 @@ contract ResultsRegistryTest is M2Base {
     }
 
     function test_VoidRejectedWhenResultExists() public {
-        vm.warp(tipOff + 2 hours);
+        vm.warp(startTime + 2 hours);
         _record(_final(game, true));
-        vm.warp(tipOff + POSTPONE + 1);
+        vm.warp(startTime + POSTPONE + 1);
         vm.prank(steward);
         vm.expectRevert(abi.encodeWithSelector(ResultsRegistry.GameNotScheduled.selector, game));
         registry.voidGame(game, "has a result");

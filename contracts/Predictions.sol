@@ -73,7 +73,7 @@ contract Predictions is IPredictions, AccessControlDefaultAdminRules, Pausable, 
         uint8 gameCount;
         RoundState state;
         uint32 submissions;
-        uint64 outcomes; // set by finalizeRound: 2 bits/game, 0 = not counted, 1 = home, 2 = away
+        uint64 outcomes; // set by finalizeRound: 2 bits/game, 0 = not counted, 1 = home, 2 = away, 3 = draw
     }
 
     struct Entry {
@@ -107,7 +107,7 @@ contract Predictions is IPredictions, AccessControlDefaultAdminRules, Pausable, 
     error InvalidGameCount(uint256 count);
     error DuplicateGame(bytes32 gameId);
     error GameNotSchedulable(bytes32 gameId);
-    error LockAfterTipOff(bytes32 gameId);
+    error LockAfterStart(bytes32 gameId);
     error RoundNotActive(bytes32 roundId);
     error RoundNotOpen(bytes32 roundId);
     error RoundLocked(bytes32 roundId);
@@ -219,9 +219,9 @@ contract Predictions is IPredictions, AccessControlDefaultAdminRules, Pausable, 
                 if (gameIds[j] == gameId) revert DuplicateGame(gameId);
             }
             // slither-disable-next-line unused-return (winner and recordedAt are not needed here)
-            (IResultsRegistry.GameStatus status, , uint64 tipOff, ) = registry.outcomeOf(gameId);
+            (IResultsRegistry.GameStatus status, , uint64 startTime, ) = registry.outcomeOf(gameId);
             if (status != IResultsRegistry.GameStatus.Scheduled) revert GameNotSchedulable(gameId);
-            if (tipOff < lockTime) revert LockAfterTipOff(gameId);
+            if (startTime < lockTime) revert LockAfterStart(gameId);
         }
 
         bytes32 gamesHash = keccak256(abi.encodePacked(gameIds));
@@ -254,9 +254,9 @@ contract Predictions is IPredictions, AccessControlDefaultAdminRules, Pausable, 
 
         bytes32[] storage gameIds = _roundGames[roundId];
         for (uint256 i = 0; i < gameIds.length; ++i) {
-            // slither-disable-next-line unused-return (only the tip-off is needed here)
-            (, , uint64 tipOff, ) = registry.outcomeOf(gameIds[i]);
-            if (tipOff < newLockTime) revert LockAfterTipOff(gameIds[i]);
+            // slither-disable-next-line unused-return (only the start time is needed here)
+            (, , uint64 startTime, ) = registry.outcomeOf(gameIds[i]);
+            if (startTime < newLockTime) revert LockAfterStart(gameIds[i]);
         }
 
         uint64 old = r.lockTime;
@@ -545,12 +545,12 @@ contract Predictions is IPredictions, AccessControlDefaultAdminRules, Pausable, 
     ) private view returns (uint64 outcomes, uint64 lastRecordedAt, bytes32 pending) {
         bytes32[] storage gameIds = _roundGames[roundId];
         for (uint256 i = 0; i < gameIds.length; ++i) {
-            (IResultsRegistry.GameStatus status, IResultsRegistry.Side winner, uint64 tipOff, uint64 recordedAt) = registry
+            (IResultsRegistry.GameStatus status, IResultsRegistry.Side winner, uint64 startTime, uint64 recordedAt) = registry
                 .outcomeOf(gameIds[i]);
             if (recordedAt == 0) return (0, 0, gameIds[i]);
             if (recordedAt > lastRecordedAt) lastRecordedAt = recordedAt;
             bool counts = (status == IResultsRegistry.GameStatus.Final ||
-                status == IResultsRegistry.GameStatus.Forfeit) && tipOff >= lockTime;
+                status == IResultsRegistry.GameStatus.Forfeit) && startTime >= lockTime;
             if (counts) outcomes |= uint64(uint8(winner)) << uint8(2 * i); // i < MAX_GAMES
         }
     }

@@ -1,6 +1,7 @@
 # injective-m2-backend
 
-Smart contracts for M2, the free-to-play prediction game on the Mongolian basketball league, on
+Smart contracts for M2, the free-to-play prediction game on real-world leagues (volleyball first;
+basketball, football, tennis and other head-to-head sports with the same contracts), on
 **Injective EVM** (chainId 1439 testnet, 1776 mainnet). Off-chain code (PWA, admin, API, worker)
 lives in `injective-m2-frontend`.
 
@@ -15,7 +16,7 @@ lives in `injective-m2-frontend`.
 operator:  registerGames ─▶ createLeague ─▶ scheduleRound(leagueId, matchday, opensAt, lockTime, gameIds)
 user:      "Confirm" in the app ─▶ worker signs EIP-712 Submission with the user's custodial key
 submitter: submitForBatch(roundId, items)            (≤ 100 per tx, ~40k gas each; we pay the gas)
-relayer:   recordResults(...)                        (after tip-off and the LocalTruth attestation)
+relayer:   recordResults(...)                        (after the start and the LocalTruth attestation)
              └─ final as soon as it is written: no correction, no challenge period
 anyone:    finalizeRound(roundId)                    (finalizationDelay, 24 h, after the round's last
                                                       result: snapshots outcomes)
@@ -30,22 +31,24 @@ Key rules:
 - **One submission per user per round**, immutable, accepted only while the round is open.
   `submitFor`/`submitForBatch` are restricted to `SUBMITTER_ROLE`: users never send transactions,
   and a user who exported their key cannot bypass the app's lock.
-- **Picks schema 1**: one byte per game in round order, `1` home / `2` away, all games required.
-  Stored packed (2 bits/game), in clear: scores are verifiable by anyone.
+- **Picks schema 1**: one byte per game in round order, `1` home / `2` away / `3` draw, all games
+  required. Stored packed (2 bits/game), in clear: scores are verifiable by anyone. A draw pick is
+  accepted on any game but can only score where the registry allows draws (the app offers it
+  only there).
 - `picksHash = keccak256(abi.encode(roundId, gamesHash, keccak256(picks)))` is recomputed by the
   contract; it is the receipt the app shows.
-- A game counts in a round only if it was `Final`/`Forfeit` and did not tip off before the lock.
-  `rescheduleGame` only accepts a future tip-off, so once a round is locked no move can drop one
+- A game counts in a round only if it was `Final`/`Forfeit` and did not start before the lock.
+  `rescheduleGame` only accepts a future start time, so once a round is locked no move can drop one
   of its games from the score.
 - Home/away teams are registered with the fixture; `recordResults` rejects a swapped file.
 - **Results are final when recorded.** They come from an accredited institutional source (MSC,
   attested on LocalTruth), so there is no correction or challenge period: the first attested
-  result of a game is the one that counts. No result is accepted before tip-off, `Void` included.
+  result of a game is the one that counts. No result is accepted before the start, `Void` included.
   The accepted risk is a relayer bug (e.g. a row matched to the wrong game) that the on-chain
   checks do not catch. The remedy is the finalization window: a round settles only
   `finalizationDelay` (24 h, admin-settable between 1 h and 7 days) after its last result, and
   until then the steward can cancel it (see "Pause and incidents").
-- A game with no result `postponeWindow` (7 days) after tip-off can be voided by the steward, so a
+- A game with no result `postponeWindow` (7 days) after its start can be voided by the steward, so a
   round is never blocked by a game that is never played nor uploaded.
 - **Final standings in two steps.** The steward proposes the root once every round is settled; a
   new proposal replaces it and restarts the 48 h review. During the review `checkStanding`
@@ -53,6 +56,29 @@ Key rules:
   provable on-chain. A round scheduled after the proposal makes it outdated.
 - Tie-break (off-chain, from on-chain data): points → rounds played → average lead time before the
   lock (`sumLeadTime / roundsPlayed`) → verifiable draw.
+
+### Sports and results
+
+The contracts are sport-agnostic. `homeScore`/`awayScore` hold the unit that decides the winner;
+partial scores (set by set, periods) stay in the attested file that `sourceHash` points to. Each
+game is registered with its format, and `recordResults` checks every result against it:
+
+| Sport | Score | `targetScore` | `drawAllowed` | A valid `Final` |
+|---|---|---|---|---|
+| Volleyball (best of 5) | sets | 3 | no | 3-0, 3-1, 3-2 |
+| Beach volleyball (best of 3) | sets | 2 | no | 2-0, 2-1 |
+| Tennis | sets | 2 or 3 | no | the winner reached the target |
+| Basketball | points | 0 | no | any score, no tie |
+| Football (league) | goals | 0 | yes | any score; a level score is `Draw` |
+
+- `targetScore` 0 means an open score: the winner is the side ahead. With `targetScore` N the
+  winner has exactly N and there are no `extraPeriods`; draws cannot be allowed with a target.
+- `extraPeriods` counts periods past regulation (basketball overtimes, football extra time).
+- `Forfeit`: the winner is `Home` or `Away`, the score is 0-0 or the winner is ahead, never past
+  the target.
+- `Side.Draw` is 3, so it fits the 2 bits per game used for picks and outcomes.
+- Not supported yet: a tennis retirement where the retiring player leads, and a knockout football
+  match decided on penalties (level score with a winner).
 
 ### Roles
 

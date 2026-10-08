@@ -48,7 +48,7 @@ describe('M2 season flow', async () => {
     return { registry, predictions }
   }
 
-  /** Registers games, creates the league and schedules one round opening one hour ago. */
+  /** Registers volleyball games, creates the league and schedules one round opening one hour ago. */
   async function setupRound(
     c: Awaited<ReturnType<typeof deployM2>>,
     slug: string,
@@ -60,7 +60,8 @@ describe('M2 season flow', async () => {
       gameId: m2.gameIdOf(`${slug}-${String(i + 1).padStart(6, '0')}`),
       homeTeam: m2.teamCodeOf(`HOME_${i}`),
       awayTeam: m2.teamCodeOf(`AWAY_${i}`),
-      tipOff: lockTime + BigInt(i * HOUR),
+      startTime: lockTime + BigInt(i * HOUR),
+      ...m2.GAME_FORMAT.volleyball,
     }))
     await c.registry.write.registerGames([games], { account: operator.account })
 
@@ -162,10 +163,17 @@ describe('M2 season flow', async () => {
     assert.equal((await c.predictions.read.getRound([roundId])).submissions, 4)
 
     // Games are played; MSC files are attested on LocalTruth; the relayer records them.
+    // Volleyball: the scores are the sets won, and the winner has exactly 3.
     await networkHelpers.time.increaseTo(Number(lockTime) + 6 * HOUR)
-    const homeWins = [true, false, true, false]
+    const sets = [
+      [3, 0],
+      [1, 3],
+      [3, 2],
+      [2, 3],
+    ]
     const results = games.map((g, i) => {
-      const csv = `spec_version,game_id,home,away,home_score,away_score,status,ot\nbb-1,${i},H,A,${homeWins[i] ? '90,80' : '80,90'},final,0`
+      const [homeSets, awaySets] = sets[i]
+      const csv = `spec_version,game_id,home,away,home_sets,away_sets,status\nvb-1,${i},H,A,${homeSets},${awaySets},final`
       const sha256Base64 = createHash('sha256').update(csv, 'utf8').digest('base64')
       const sourceHash = m2.sourceHashFromBase64(sha256Base64)
       assert.equal(sourceHash, `0x${createHash('sha256').update(csv, 'utf8').digest('hex')}`)
@@ -174,10 +182,10 @@ describe('M2 season flow', async () => {
         homeTeam: g.homeTeam,
         awayTeam: g.awayTeam,
         status: 2, // Final
-        winner: homeWins[i] ? 1 : 2,
-        homeScore: homeWins[i] ? 90 : 80,
-        awayScore: homeWins[i] ? 80 : 90,
-        overtimes: 0,
+        winner: homeSets > awaySets ? 1 : 2,
+        homeScore: homeSets,
+        awayScore: awaySets,
+        extraPeriods: 0,
         sourceHash,
         attestationId: `mbl_2026_game-${i}`,
       }

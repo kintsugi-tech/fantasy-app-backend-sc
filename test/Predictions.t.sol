@@ -21,13 +21,14 @@ contract PredictionsTest is M2Base {
 
     uint8 internal constant H = 1;
     uint8 internal constant A = 2;
+    uint8 internal constant D = 3;
 
     function setUp() public override {
         super.setUp();
         _createLeague();
         opensAt = T0;
         lockTime = T0 + 2 days;
-        games = _registerGames(3, lockTime); // tip-off exactly at the lock is allowed
+        games = _registerGames(3, lockTime); // a start exactly at the lock is allowed
         roundId = _scheduleRound(1, games, opensAt, lockTime);
         vm.warp(T0 + 1 hours);
     }
@@ -82,7 +83,7 @@ contract PredictionsTest is M2Base {
             more,
             opensAt,
             lock2 + 1,
-            abi.encodeWithSelector(Predictions.LockAfterTipOff.selector, more[0])
+            abi.encodeWithSelector(Predictions.LockAfterStart.selector, more[0])
         );
 
         bytes32[] memory dup = new bytes32[](2);
@@ -158,7 +159,7 @@ contract PredictionsTest is M2Base {
         uint64 now_ = uint64(block.timestamp);
         _expectRejected(_item(aliceKey, alice, roundId, abi.encodePacked(H, A), now_), Predictions.SubmitStatus.InvalidPicks);
         _expectRejected(_item(aliceKey, alice, roundId, _picks(H, 0, A), now_), Predictions.SubmitStatus.InvalidPicks);
-        _expectRejected(_item(aliceKey, alice, roundId, _picks(H, 3, A), now_), Predictions.SubmitStatus.InvalidPicks);
+        _expectRejected(_item(aliceKey, alice, roundId, _picks(H, 4, A), now_), Predictions.SubmitStatus.InvalidPicks);
     }
 
     function test_SubmitRejectsPicksHashMismatch() public {
@@ -334,7 +335,7 @@ contract PredictionsTest is M2Base {
         assertEq(predictions.getRound(roundId).lockTime, lockTime - 1 hours);
 
         vm.prank(operator);
-        vm.expectRevert(abi.encodeWithSelector(Predictions.LockAfterTipOff.selector, games[0]));
+        vm.expectRevert(abi.encodeWithSelector(Predictions.LockAfterStart.selector, games[0]));
         predictions.updateRoundLock(roundId, lockTime + 1);
 
         vm.prank(operator);
@@ -507,13 +508,13 @@ contract PredictionsTest is M2Base {
         _assertScore(alice, 1, 1);
     }
 
-    /// C1: once picks are locked no move can drop a game from the score, because a new tip-off
+    /// C1: once picks are locked no move can drop a game from the score, because a new start time
     /// must be in the future and therefore after the lock.
     function test_GameCannotBeDroppedAfterLock() public {
         _submit(aliceKey, alice, roundId, _picks(H, A, H));
         vm.warp(lockTime + 1);
         vm.prank(operator);
-        vm.expectRevert(abi.encodeWithSelector(ResultsRegistry.TipOffInPast.selector, games[0], lockTime - 1));
+        vm.expectRevert(abi.encodeWithSelector(ResultsRegistry.StartTimeInPast.selector, games[0], lockTime - 1));
         registry.rescheduleGame(games[0], lockTime - 1);
 
         // Postponing to a later date still works, and the game keeps counting.
@@ -558,6 +559,35 @@ contract PredictionsTest is M2Base {
         assertEq(outcomes >> 62, 0); // game 32 (void) in the top two bits
         assertEq((outcomes >> 60) & 3, 2); // game 31 (index 30, a multiple of 3): away win
         assertEq((outcomes >> 58) & 3, 1); // game 30 (index 29): home win
+    }
+
+    /// Football 1X2: a draw pick scores on a drawn game. On a game without draws it is accepted
+    /// but can never match, since the registry never records a draw there.
+    function test_DrawPicks() public {
+        uint64 lock = lockTime + 1 days;
+        bytes32[] memory football = _registerGames(2, lock, 0, true);
+        bytes32[] memory ids = new bytes32[](3);
+        (ids[0], ids[1], ids[2]) = (football[0], football[1], _registerGames(1, lock)[0]);
+        bytes32 round2 = _scheduleRound(2, ids, opensAt, lock);
+
+        _submit(aliceKey, alice, round2, _picks(D, D, D));
+        _submit(bobKey, bob, round2, _picks(D, H, A));
+        (, , bytes memory stored) = predictions.getEntry(round2, alice);
+        assertEq(stored, _picks(D, D, D));
+
+        vm.warp(lock + 3 hours);
+        _record(_draw(ids[0]));
+        _record(_result(ids[1], IResultsRegistry.GameStatus.Final, IResultsRegistry.Side.Home, 2, 0));
+        _record(_final(ids[2], false));
+        _finalizeRound(round2);
+
+        assertEq(predictions.getRound(round2).outcomes, uint64(3 | (1 << 2) | (2 << 4)));
+        (uint8 correct, uint8 counted) = predictions.scoreOf(round2, alice);
+        assertEq(correct, 1);
+        assertEq(counted, 3);
+        (correct, counted) = predictions.scoreOf(round2, bob);
+        assertEq(correct, 3);
+        assertEq(counted, 3);
     }
 
     function test_ForfeitCounts() public {
@@ -788,7 +818,7 @@ contract PredictionsTest is M2Base {
 
     function testFuzz_PickValues(uint8 a, uint8 b, uint8 c) public {
         Predictions.BatchItem memory it = _item(aliceKey, alice, roundId, _picks(a, b, c), uint64(block.timestamp));
-        bool valid = (a == H || a == A) && (b == H || b == A) && (c == H || c == A);
+        bool valid = (a >= H && a <= D) && (b >= H && b <= D) && (c >= H && c <= D);
         Predictions.BatchItem[] memory items = new Predictions.BatchItem[](1);
         items[0] = it;
         vm.prank(submitter);

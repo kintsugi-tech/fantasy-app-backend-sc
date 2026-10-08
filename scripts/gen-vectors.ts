@@ -32,9 +32,11 @@ const roundId = m2.roundIdOf(leagueId, matchday)
 const gamesHash = m2.gamesHashOf(gameIds)
 const domain = m2.eip712Domain(CHAIN_ID, VERIFYING_CONTRACT)
 
+// The round locks at 1_800_007_200: sumLeadTime below is lockTime - confirmedAt.
 const players = [
   { seed: 'm2-vector-user-0', picks: [1, 2, 1] as m2.Pick[], confirmedAt: 1_800_000_000n },
   { seed: 'm2-vector-user-1', picks: [2, 2, 2] as m2.Pick[], confirmedAt: 1_800_003_600n },
+  { seed: 'm2-vector-user-2', picks: [3, 1, 3] as m2.Pick[], confirmedAt: 1_800_005_400n },
 ]
 
 async function main() {
@@ -61,11 +63,21 @@ async function main() {
     'bb-1,000101,2026-11-14T19:00:00+08:00,UB_BRONCOS,ZAVKHAN_BROTHERS,88,80,final,0'
   const sha256Base64 = createHash('sha256').update(csv, 'utf8').digest('base64')
 
-  const outcomes = [m2.OUTCOME.HOME, m2.OUTCOME.NOT_COUNTED, m2.OUTCOME.HOME]
+  // Game 3 ends in a draw: only the draw pick of user 2 scores on it.
+  const outcomes = [m2.OUTCOME.HOME, m2.OUTCOME.NOT_COUNTED, m2.OUTCOME.DRAW]
+  // Users 0 and 2 tie on points and rounds; user 0 confirmed earlier, so it ranks first.
   const standings = [
-    { account: submissions[0].user, rank: 1, points: 2, correct: 2, counted: 2, roundsPlayed: 1, sumLeadTime: 7_200n },
-    { account: submissions[1].user, rank: 2, points: 0, correct: 0, counted: 2, roundsPlayed: 1, sumLeadTime: 3_600n },
+    { account: submissions[0].user, rank: 1, points: 1, correct: 1, counted: 2, roundsPlayed: 1, sumLeadTime: 7_200n },
+    { account: submissions[2].user, rank: 2, points: 1, correct: 1, counted: 2, roundsPlayed: 1, sumLeadTime: 1_800n },
+    { account: submissions[1].user, rank: 3, points: 0, correct: 0, counted: 2, roundsPlayed: 1, sumLeadTime: 3_600n },
   ]
+  // The hard-coded rows must agree with the scoring and the tie-breaks.
+  const ranked = m2.rankPlayers(standings)
+  for (const [i, s] of standings.entries()) {
+    const score = m2.scoreRound(players[submissions.findIndex((x) => x.user === s.account)].picks, outcomes)
+    if (score.correct !== s.correct || score.counted !== s.counted) throw new Error(`row ${i}: wrong score`)
+    if (ranked[i].account !== s.account || ranked[i].rank !== s.rank) throw new Error(`row ${i}: wrong rank`)
+  }
   const tree = StandardMerkleTree.of(
     standings.map((s) => m2.standingLeafOf(leagueId, s)),
     [...m2.STANDINGS_LEAF_ENCODING],

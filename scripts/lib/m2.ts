@@ -15,11 +15,25 @@ import {
   stringToHex,
 } from 'viem'
 
-export const PICK = { HOME: 1, AWAY: 2 } as const
+/** Picks use the values of IResultsRegistry.Side; DRAW only makes sense where draws are allowed. */
+export const PICK = { HOME: 1, AWAY: 2, DRAW: 3 } as const
 export type Pick = (typeof PICK)[keyof typeof PICK]
 
 /** Outcome of a game inside a finalized round (Predictions.Round.outcomes, 2 bits per game). */
-export const OUTCOME = { NOT_COUNTED: 0, HOME: 1, AWAY: 2 } as const
+export const OUTCOME = { NOT_COUNTED: 0, HOME: 1, AWAY: 2, DRAW: 3 } as const
+
+/**
+ * Game formats for ResultsRegistry.registerGames (GameInfo.targetScore, GameInfo.drawAllowed).
+ * The scores recorded are the unit that decides the winner: points, goals or sets.
+ */
+export const GAME_FORMAT = {
+  basketball: { targetScore: 0, drawAllowed: false }, // points
+  football: { targetScore: 0, drawAllowed: true }, // goals, league match
+  volleyball: { targetScore: 3, drawAllowed: false }, // sets, best of 5
+  beachVolleyball: { targetScore: 2, drawAllowed: false }, // sets, best of 3
+} as const
+export type Sport = keyof typeof GAME_FORMAT
+export type GameFormat = { targetScore: number; drawAllowed: boolean }
 
 // --- identifiers ------------------------------------------------------------------------------
 
@@ -45,10 +59,10 @@ export const gamesHashOf = (gameIds: readonly Hex[]): Hex =>
 
 // --- picks ------------------------------------------------------------------------------------
 
-/** Picks schema 1: one byte per game in the round's order, 1 = home, 2 = away. */
+/** Picks schema 1: one byte per game in the round's order, 1 = home, 2 = away, 3 = draw. */
 export const encodePicks = (picks: readonly Pick[]): Hex => {
   for (const p of picks) {
-    if (p !== PICK.HOME && p !== PICK.AWAY) throw new Error(`invalid pick ${p}`)
+    if (p !== PICK.HOME && p !== PICK.AWAY && p !== PICK.DRAW) throw new Error(`invalid pick ${p}`)
   }
   return bytesToHex(Uint8Array.from(picks))
 }

@@ -63,6 +63,15 @@
       "confirmedAt": "1800003600",
       "digest": "0xcccb6ef48fa5ab5180943e4b9ed8033fc9fbdfaa91d630d969a44529b2ee54f3",
       "signature": "0x6c6dbd3c5231089f156bc1feb11057985cada09d329c6e8dc52ad236136c4c0c590a6c5a4549f385f46dd148b45654ba8d0fd7bc937488c21c9942ecdc2f24091c"
+    },
+    {
+      "privateKeySeed": "m2-vector-user-2",
+      "user": "0x57E6bEd79674EEC8fdFa64Fc929118E2042F4eaA",
+      "picks": "0x030103",
+      "picksHash": "0x67119cb1d26db3a1caff54aa0429b930249a27112f452f7720610b876e5b221e",
+      "confirmedAt": "1800005400",
+      "digest": "0xc7520cf0ccf8ae008e3bb5fd6b80f80b22769c25ab8d425f533245f7a69b6b78",
+      "signature": "0x8e7e0278b4440f5d68732ff2f59d025c290dd0ca45733463a063a90406c0d89d3ad46f71acb74e870ac38130c8afe4e317cd1390658a2f0abd427928971e51cc1c"
     }
   ],
   "result": {
@@ -74,44 +83,62 @@
     "outcomes": [
       1,
       0,
-      1
+      3
     ],
     "scores": [
       {
-        "correct": 2,
+        "correct": 1,
         "counted": 2
       },
       {
         "correct": 0,
         "counted": 2
+      },
+      {
+        "correct": 1,
+        "counted": 2
       }
     ]
   },
   "standings": {
-    "root": "0x4b13e4331eb3d93edfeadb2a8782b07e2b06dcea373c20ad52fff5ebe559e442",
+    "root": "0x5b043cae9350ef775e8ba66ba4dd5a19e2c92a8064add2a004186e5d22820a0f",
     "leaves": [
       {
         "account": "0x3d67e165c374DF796477c92fF9077de526e36287",
         "rank": 1,
-        "points": 2,
-        "correct": 2,
+        "points": 1,
+        "correct": 1,
         "counted": 2,
         "roundsPlayed": 1,
         "sumLeadTime": "7200",
         "proof": [
-          "0x05d3ed4636e30933e10841510e1e7d42820bba5464d230d3d558c8ea532e6cb7"
+          "0xc69cfb223b188a2246a8bf236e37eafbd1865f82c99683b33b4c938253e617b1"
+        ]
+      },
+      {
+        "account": "0x57E6bEd79674EEC8fdFa64Fc929118E2042F4eaA",
+        "rank": 2,
+        "points": 1,
+        "correct": 1,
+        "counted": 2,
+        "roundsPlayed": 1,
+        "sumLeadTime": "1800",
+        "proof": [
+          "0x17e559526202e5c005c39c8682ee2a0a37828e2a56e71fb775657182aabf9528",
+          "0xf7a3ea2bdc3d723c93c7b7c57a17b671d507d14cf23a40dc0ade051bfde26d85"
         ]
       },
       {
         "account": "0xdDeA6B02788679d38e1601acDD426d94eEe8284D",
-        "rank": 2,
+        "rank": 3,
         "points": 0,
         "correct": 0,
         "counted": 2,
         "roundsPlayed": 1,
         "sumLeadTime": "3600",
         "proof": [
-          "0x2f388781e23826505ecede6c853c244ce7b8c02dd32861b19ab5b860ee9abdb6"
+          "0x361aacde02bc7b02c5b987ebc91393d943cc55e3acc80778aef4d1527cf9809a",
+          "0xf7a3ea2bdc3d723c93c7b7c57a17b671d507d14cf23a40dc0ade051bfde26d85"
         ]
       }
     ]

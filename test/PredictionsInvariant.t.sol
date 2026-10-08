@@ -113,7 +113,7 @@ contract PredictionsHandler is Test {
         IResultsRegistry.Game memory g = registry.getGame(gameId);
         if (g.status != IResultsRegistry.GameStatus.Scheduled) return;
         uint64 lockTime = predictions.getRound(roundId).lockTime;
-        if (block.timestamp >= lockTime && g.tipOff >= lockTime) lockedIn[gameId] = true;
+        if (block.timestamp >= lockTime && g.startTime >= lockTime) lockedIn[gameId] = true;
         vm.prank(operator);
         registry.rescheduleGame(gameId, uint64(block.timestamp) - 1 days + uint64(offset % 3 days));
     }
@@ -126,8 +126,8 @@ contract PredictionsHandler is Test {
         if (r.state != Predictions.RoundState.Scheduled || block.timestamp >= r.lockTime) return;
         uint64 newLock = uint64(block.timestamp) + 1 + uint64(offset % 1 days);
         for (uint256 i = 0; i < GAMES; ++i) {
-            uint64 tipOff = registry.getGame(_games[roundId][i]).tipOff;
-            if (tipOff < newLock) newLock = tipOff;
+            uint64 startTime = registry.getGame(_games[roundId][i]).startTime;
+            if (startTime < newLock) newLock = startTime;
         }
         if (newLock <= block.timestamp || newLock <= r.opensAt) return;
         vm.prank(operator);
@@ -140,7 +140,7 @@ contract PredictionsHandler is Test {
         for (uint256 i = 0; i < GAMES; ++i) {
             bytes32 gameId = _games[roundId][i];
             IResultsRegistry.Game memory g = registry.getGame(gameId);
-            if (g.status != IResultsRegistry.GameStatus.Scheduled || block.timestamp < g.tipOff) continue;
+            if (g.status != IResultsRegistry.GameStatus.Scheduled || block.timestamp < g.startTime) continue;
             bool isVoid = (voidBits >> i) & 1 == 1;
             bool homeWins = (winBits >> i) & 1 == 1;
             IResultsRegistry.ResultInput[] memory batch = new IResultsRegistry.ResultInput[](1);
@@ -152,7 +152,7 @@ contract PredictionsHandler is Test {
                 winner: isVoid ? IResultsRegistry.Side.None : (homeWins ? IResultsRegistry.Side.Home : IResultsRegistry.Side.Away),
                 homeScore: isVoid ? 0 : (homeWins ? 90 : 80),
                 awayScore: isVoid ? 0 : (homeWins ? 80 : 90),
-                overtimes: 0,
+                extraPeriods: 0,
                 sourceHash: keccak256(abi.encode(gameId)),
                 attestationId: "invariant"
             });
@@ -280,7 +280,7 @@ contract PredictionsInvariantTest is M2Base {
                 bool played = g.status == IResultsRegistry.GameStatus.Final ||
                     g.status == IResultsRegistry.GameStatus.Forfeit;
                 bool counted = (round.outcomes >> (2 * i)) & 3 != 0;
-                assertEq(counted, played && g.tipOff >= round.lockTime);
+                assertEq(counted, played && g.startTime >= round.lockTime);
                 if (played && handler.lockedIn(handler.gameOf(roundId, i))) assertTrue(counted, "played after lock");
             }
         }
