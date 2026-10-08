@@ -1,7 +1,6 @@
 # injective-m2-backend
 
-Smart contracts for M2, the free-to-play prediction game on real-world leagues (volleyball first;
-basketball, football, tennis and other head-to-head sports with the same contracts), on
+Smart contracts for M2, the free-to-play prediction game on the Mongolian volleyball league, on
 **Injective EVM** (chainId 1439 testnet, 1776 mainnet). Off-chain code (PWA, admin, API, worker)
 lives in `injective-m2-frontend`.
 
@@ -57,28 +56,26 @@ Key rules:
 - Tie-break (off-chain, from on-chain data): points → rounds played → average lead time before the
   lock (`sumLeadTime / roundsPlayed`) → verifiable draw.
 
-### Sports and results
+### Results and game formats
 
-The contracts are sport-agnostic. `homeScore`/`awayScore` hold the unit that decides the winner;
-partial scores (set by set, periods) stay in the attested file that `sourceHash` points to. Each
-game is registered with its format, and `recordResults` checks every result against it:
+`homeScore`/`awayScore` hold the unit that decides the winner: sets in volleyball. Set by set
+points stay in the attested file that `sourceHash` points to. Each game is registered with its
+format, and `recordResults` checks every result against it. The format is per game, so another
+head-to-head sport needs no contract change, only its format (set in the app's CMS):
 
-| Sport | Score | `targetScore` | `drawAllowed` | A valid `Final` |
-|---|---|---|---|---|
-| Volleyball (best of 5) | sets | 3 | no | 3-0, 3-1, 3-2 |
-| Beach volleyball (best of 3) | sets | 2 | no | 2-0, 2-1 |
-| Tennis | sets | 2 or 3 | no | the winner reached the target |
-| Basketball | points | 0 | no | any score, no tie |
-| Football (league) | goals | 0 | yes | any score; a level score is `Draw` |
+| Format | `targetScore` | `drawAllowed` | A valid `Final` |
+|---|---|---|---|
+| Race to N (volleyball: N = 3 sets) | N | no | the winner has exactly N: 3-0, 3-1, 3-2 |
+| Open score | 0 | no | any score, the side ahead wins |
+| Open score with draws | 0 | yes | any score; a level score is `Draw` |
 
-- `targetScore` 0 means an open score: the winner is the side ahead. With `targetScore` N the
-  winner has exactly N and there are no `extraPeriods`; draws cannot be allowed with a target.
-- `extraPeriods` counts periods past regulation (basketball overtimes, football extra time).
+- With a target there are no `extraPeriods` and no draws (registering both is refused).
+- `extraPeriods` counts periods past regulation, for sports that have them; always 0 in volleyball.
 - `Forfeit`: the winner is `Home` or `Away`, the score is 0-0 or the winner is ahead, never past
   the target.
 - `Side.Draw` is 3, so it fits the 2 bits per game used for picks and outcomes.
-- Not supported yet: a tennis retirement where the retiring player leads, and a knockout football
-  match decided on penalties (level score with a winner).
+- Not supported: a game given up by the side that leads (the forfeit check refuses it) and a level
+  score decided by a shootout (a level score is only a draw).
 
 ### Roles
 
@@ -113,7 +110,7 @@ cancel it.
 `test/vectors/m2-vectors.json` pins the values. Both the Solidity tests (`Vectors.t.sol`) and
 the TypeScript tests check them, so the app can rely on them.
 
-- `gameId = keccak256(bytes("mbl-2026-27-000123"))`, `leagueId = keccak256(bytes(slug))`
+- `gameId = keccak256(bytes("mvl-2026-27-000123"))`, `leagueId = keccak256(bytes(slug))`
 - `roundId = keccak256(abi.encode(leagueId, uint16 matchday))`, never reused
 - team code = bytes32 short string (`bytes32("UB_BRONCOS")`)
 - EIP-712 domain `("M2Predictions", "1", chainId, predictions)`, type

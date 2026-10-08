@@ -4,9 +4,9 @@ pragma solidity ^0.8.28;
 /// @title IResultsRegistry
 /// @notice Per-game results of the real-world competition, anchored to LocalTruth attestations.
 ///
-///         Sport-agnostic: the scores are the unit that decides the winner (points in basketball,
-///         goals in football, sets in volleyball and tennis). Partial scores (set by set, periods)
-///         stay in the attested file, which `sourceHash` points to.
+///         The scores are the unit that decides the winner (sets in volleyball); partial scores
+///         (set by set) stay in the attested file, which `sourceHash` points to. Each game carries
+///         its format, so another head-to-head sport needs no change here.
 interface IResultsRegistry {
     enum GameStatus {
         None, // never registered
@@ -25,11 +25,10 @@ interface IResultsRegistry {
     }
 
     /// @notice Fixture data, registered before the game can be used in a round.
-    ///         The format fields say how a result is checked:
-    ///           basketball    targetScore 0, drawAllowed false (points)
-    ///           football      targetScore 0, drawAllowed true  (goals)
-    ///           volleyball    targetScore 3 (beach: 2), drawAllowed false (sets)
-    ///           tennis        targetScore 2 or 3, drawAllowed false (sets)
+    ///         The format says how a result is checked:
+    ///           targetScore N   the winner is the first side to reach N (volleyball: 3 sets)
+    ///           targetScore 0   open score: the side ahead wins
+    ///           drawAllowed     an open score may end level (Side.Draw)
     struct GameInfo {
         bytes32 gameId; // keccak256(bytes(canonicalGameId))
         bytes32 homeTeam; // team (or player) code as a bytes32 short string
@@ -48,7 +47,7 @@ interface IResultsRegistry {
         Side winner;
         uint16 homeScore;
         uint16 awayScore;
-        uint8 extraPeriods; // periods past regulation (basketball overtimes, football extra time)
+        uint8 extraPeriods; // periods past regulation, where the sport has them (never with a target)
         bytes32 sourceHash; // SHA-256 of the attested public file (decoded from base64 sha256_pub)
         string attestationId; // LocalTruth competition_id the file was attested under
     }

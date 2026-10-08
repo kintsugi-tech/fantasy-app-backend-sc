@@ -7,23 +7,23 @@
     "verifyingContract": "0x1111111111111111111111111111111111111111"
   },
   "league": {
-    "slug": "mbl-2026-27-main",
-    "leagueId": "0xe9912c4dc440f8241b3380d7c0d75fc2a20c30cd9931f5a7d91849d7c0cec5c1"
+    "slug": "mvl-2026-27-main",
+    "leagueId": "0x44e05cd9a663c754b9a016a34e539e4de1488dc1b9f8d97393c49a6e5a1dfd6a"
   },
   "round": {
     "matchday": 7,
-    "roundId": "0x97e5740e62f4f2823790687d956fa10c821023aabb9386528e2d6194f25f75f1",
+    "roundId": "0xa8db9146f3839d6c3a776cae6d60d8b4cf5473c138765ec84e9642fb7e957197",
     "canonicalGameIds": [
-      "mbl-2026-27-000101",
-      "mbl-2026-27-000102",
-      "mbl-2026-27-000103"
+      "mvl-2026-27-000101",
+      "mvl-2026-27-000102",
+      "mvl-2026-27-000103"
     ],
     "gameIds": [
-      "0xbb0c5875b6f55e53b40d469c3bf0cc48b56c7a9d4b75b184c7c0e611bee5de59",
-      "0xf0b07b8d525d5f2cd2781281b88a02f1df9ea3c8d2846e4ef0c3973833bae48c",
-      "0x91629ff26a7f26284a3252af2a1ec903f0f5fb0b7666e07df98227d7877b41f6"
+      "0x927899a549c99aa2f9944dbf5a0728ca1fea9806aa8047099533d1ae5e0a9e5c",
+      "0xddcc59a6b153b4ecc5a6cf40faa78b92b5234c59b191d6154bab1e96d0872e06",
+      "0x33a945618abc202d2cdf4a8da76ba44809964310bee60ba05153d4f6430be3a8"
     ],
-    "gamesHash": "0x60bcdaad8d4d7afdd9854971c3040f44366ad899959bed057164c11b35e94582"
+    "gamesHash": "0xed8e2f21c678ef5662b73ab315d70946265142e503bfb048749bae094112ec8b"
   },
   "teams": [
     {
@@ -50,34 +50,34 @@
       "privateKeySeed": "m2-vector-user-0",
       "user": "0x3d67e165c374DF796477c92fF9077de526e36287",
       "picks": "0x010201",
-      "picksHash": "0xca1c6dc8435bd057b361809fee7a52ba6278202ecb4b1a46661779d6f6224377",
+      "picksHash": "0xc54c442fe6181cb2d5a708a6429551703614a92937b7e443c6275477207aee64",
       "confirmedAt": "1800000000",
-      "digest": "0xd5ec3995ce1c3fc09180661729a93394a9663e38d6e37f4fa38ffa7c1fea64ad",
-      "signature": "0x536d223221642d59a96afcf0ed0b9fe1ede12362ea9f5620a803f920d53f2b31683a7bfde93eb64b1043ba760a6870dcf233e4be644343933157a81627e399f31c"
+      "digest": "0x5c6d8ee398b8d9db1a805331b7544470eb6c3ddb186f49b3f6109cf6aef79098",
+      "signature": "0x5bc3f846448b832a34977fee180aa8947a564ba36fb2546ad25c0948a8554eba4156e92ce7615a1fd90ae12792738f7df26793e9a5b163b0c965803fff63b8351b"
     },
     {
       "privateKeySeed": "m2-vector-user-1",
       "user": "0xdDeA6B02788679d38e1601acDD426d94eEe8284D",
       "picks": "0x020202",
-      "picksHash": "0x4e607b27ad2fa1780db6f90590bfd90b76f8f86e905309015d656bd1862a99db",
+      "picksHash": "0xa13e2ae9c9ea398d54312d7478e5c0fc281d66145cc4cc1d66fdba488ec8f873",
       "confirmedAt": "1800003600",
-      "digest": "0xcccb6ef48fa5ab5180943e4b9ed8033fc9fbdfaa91d630d969a44529b2ee54f3",
-      "signature": "0x6c6dbd3c5231089f156bc1feb11057985cada09d329c6e8dc52ad236136c4c0c590a6c5a4549f385f46dd148b45654ba8d0fd7bc937488c21c9942ecdc2f24091c"
+      "digest": "0xb8c52c4089cc33bf1002817fce1b15af225436ce5a58eed670d5d32b4b713f20",
+      "signature": "0x458506f42b61e31bb910b1b967cb57f8f5f889be2550db9c6eacca608d9a426d3fc65f7f7c9f7c759834872bd4439fd2a2d127e864e24ac816d190305441f26c1c"
     },
     {
       "privateKeySeed": "m2-vector-user-2",
       "user": "0x57E6bEd79674EEC8fdFa64Fc929118E2042F4eaA",
       "picks": "0x030103",
-      "picksHash": "0x67119cb1d26db3a1caff54aa0429b930249a27112f452f7720610b876e5b221e",
+      "picksHash": "0xe50120673bc83d7e856e96716410b05fc283b8569c8cdd864de9a19fe67290db",
       "confirmedAt": "1800005400",
-      "digest": "0xc7520cf0ccf8ae008e3bb5fd6b80f80b22769c25ab8d425f533245f7a69b6b78",
-      "signature": "0x8e7e0278b4440f5d68732ff2f59d025c290dd0ca45733463a063a90406c0d89d3ad46f71acb74e870ac38130c8afe4e317cd1390658a2f0abd427928971e51cc1c"
+      "digest": "0xda9c5b7e3d319c9b98ed0f57f056eae5e86da98465f832a75025d23bc0f0598f",
+      "signature": "0x906eb677bb2c9e663cd6777f3aa1e37e300e53f4b7c9aad73dd542b43e4593d71432872bcd6fb2760368c131f490e96057225acf8d4245aced0b641301f102ae1c"
     }
   ],
   "result": {
-    "csv": "spec_version,game_id,date,home,away,home_score,away_score,status,ot\nbb-1,000101,2026-11-14T19:00:00+08:00,UB_BRONCOS,ZAVKHAN_BROTHERS,88,80,final,0",
-    "sha256Base64": "/uDgHXqkMlODoluDPgU+qCb8mnDCpWHuMfZfByCvRx0=",
-    "sourceHash": "0xfee0e01d7aa4325383a25b833e053ea826fc9a70c2a561ee31f65f0720af471d"
+    "csv": "spec_version,game_id,date,home,away,home_sets,away_sets,status,forfeit_team\nvb-1,000101,2026-11-14T19:00:00+08:00,UB_BRONCOS,ZAVKHAN_BROTHERS,3,1,final,",
+    "sha256Base64": "SL6J4WwMRaeWSs7kv2rlydxiNZ6diRoJ07qJ2Baqt1U=",
+    "sourceHash": "0x48be89e16c0c45a7964acee4bf6ae5c9dc62359e9d891a09d3ba89d816aab755"
   },
   "scoring": {
     "outcomes": [
@@ -101,7 +101,7 @@
     ]
   },
   "standings": {
-    "root": "0x5b043cae9350ef775e8ba66ba4dd5a19e2c92a8064add2a004186e5d22820a0f",
+    "root": "0x090940636556b48598fbf43eb89e98c1f66f38df45db977b997dcd155d7ab567",
     "leaves": [
       {
         "account": "0x3d67e165c374DF796477c92fF9077de526e36287",
@@ -112,7 +112,8 @@
         "roundsPlayed": 1,
         "sumLeadTime": "7200",
         "proof": [
-          "0xc69cfb223b188a2246a8bf236e37eafbd1865f82c99683b33b4c938253e617b1"
+          "0x4ae4770882f1e70bf56ee2dbb44faa999f9916a0a5c2a54bed79ca5b54b645b9",
+          "0xa83325fe5358386748b0142e79c2198a9e30d2848b4f38987711b02d1f0e110e"
         ]
       },
       {
@@ -124,8 +125,8 @@
         "roundsPlayed": 1,
         "sumLeadTime": "1800",
         "proof": [
-          "0x17e559526202e5c005c39c8682ee2a0a37828e2a56e71fb775657182aabf9528",
-          "0xf7a3ea2bdc3d723c93c7b7c57a17b671d507d14cf23a40dc0ade051bfde26d85"
+          "0xa0127031e38f3260a0b2cbdcecf566d9473f1db6462dd391bb64a5c86b8544e9",
+          "0xa83325fe5358386748b0142e79c2198a9e30d2848b4f38987711b02d1f0e110e"
         ]
       },
       {
@@ -137,8 +138,7 @@
         "roundsPlayed": 1,
         "sumLeadTime": "3600",
         "proof": [
-          "0x361aacde02bc7b02c5b987ebc91393d943cc55e3acc80778aef4d1527cf9809a",
-          "0xf7a3ea2bdc3d723c93c7b7c57a17b671d507d14cf23a40dc0ade051bfde26d85"
+          "0x3d168782d80058e8a05bebd3e3ac5d32a266d25846f5ec44a1ee0db4093cb341"
         ]
       }
     ]

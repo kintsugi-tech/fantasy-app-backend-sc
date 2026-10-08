@@ -20,6 +20,8 @@ import * as m2 from '../scripts/lib/m2.js'
 const HOUR = 3600
 const POSTPONE = 7 * 24 * HOUR
 const FINALIZATION_DELAY = 24 * HOUR
+/** Volleyball, best of 5: the winner is the first to 3 sets. */
+const VOLLEYBALL: m2.GameFormat = { targetScore: 3, drawAllowed: false }
 
 describe('M2 season flow', async () => {
   const { viem, networkHelpers } = await network.create()
@@ -61,7 +63,7 @@ describe('M2 season flow', async () => {
       homeTeam: m2.teamCodeOf(`HOME_${i}`),
       awayTeam: m2.teamCodeOf(`AWAY_${i}`),
       startTime: lockTime + BigInt(i * HOUR),
-      ...m2.GAME_FORMAT.volleyball,
+      ...VOLLEYBALL,
     }))
     await c.registry.write.registerGames([games], { account: operator.account })
 
@@ -123,7 +125,7 @@ describe('M2 season flow', async () => {
 
   it('runs a full league: fixtures, signed batch, results, scoring, standings', async () => {
     const c = await deployM2()
-    const { leagueId, roundId, games, gameIds, lockTime, now } = await setupRound(c, 'mbl-2026-27', 4)
+    const { leagueId, roundId, games, gameIds, lockTime, now } = await setupRound(c, 'mvl-2026-27', 4)
     const gamesHash = m2.gamesHashOf(gameIds)
 
     const round = await c.predictions.read.getRound([roundId])
@@ -187,7 +189,7 @@ describe('M2 season flow', async () => {
         awayScore: awaySets,
         extraPeriods: 0,
         sourceHash,
-        attestationId: `mbl_2026_game-${i}`,
+        attestationId: `mvl_2026_game-${i}`,
       }
     })
     await c.registry.write.recordResults([results.slice(0, 3)], { account: resultsRelayer.account })
@@ -245,7 +247,7 @@ describe('M2 season flow', async () => {
     const report = JSON.stringify(tree.dump(), (_, v) => (typeof v === 'bigint' ? v.toString() : v))
     const reportHash = keccak256(stringToHex(report))
     await c.predictions.write.proposeStandings(
-      [leagueId, tree.root as Hex, ranked.length, reportHash, 'https://m2.example/reports/mbl.json'],
+      [leagueId, tree.root as Hex, ranked.length, reportHash, 'https://m2.example/reports/mvl.json'],
       { account: steward.account },
     )
 

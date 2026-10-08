@@ -17,9 +17,9 @@ import * as m2 from './lib/m2.js'
 const CHAIN_ID = 1439
 const VERIFYING_CONTRACT = '0x1111111111111111111111111111111111111111' as Hex
 
-const leagueSlug = 'mbl-2026-27-main'
+const leagueSlug = 'mvl-2026-27-main'
 const matchday = 7
-const canonicalGameIds = ['mbl-2026-27-000101', 'mbl-2026-27-000102', 'mbl-2026-27-000103']
+const canonicalGameIds = ['mvl-2026-27-000101', 'mvl-2026-27-000102', 'mvl-2026-27-000103']
 const teams = [
   ['UB_BRONCOS', 'ZAVKHAN_BROTHERS'],
   ['KHASYN_KHULUGUUD', 'DARKHAN_UNITED'],
@@ -59,8 +59,8 @@ async function main() {
     }),
   )
 
-  const csv = 'spec_version,game_id,date,home,away,home_score,away_score,status,ot\n' +
-    'bb-1,000101,2026-11-14T19:00:00+08:00,UB_BRONCOS,ZAVKHAN_BROTHERS,88,80,final,0'
+  const csv = 'spec_version,game_id,date,home,away,home_sets,away_sets,status,forfeit_team\n' +
+    'vb-1,000101,2026-11-14T19:00:00+08:00,UB_BRONCOS,ZAVKHAN_BROTHERS,3,1,final,'
   const sha256Base64 = createHash('sha256').update(csv, 'utf8').digest('base64')
 
   // Game 3 ends in a draw: only the draw pick of user 2 scores on it.

@@ -150,8 +150,8 @@ contract PredictionsHandler is Test {
                 awayTeam: g.awayTeam,
                 status: isVoid ? IResultsRegistry.GameStatus.Void : IResultsRegistry.GameStatus.Final,
                 winner: isVoid ? IResultsRegistry.Side.None : (homeWins ? IResultsRegistry.Side.Home : IResultsRegistry.Side.Away),
-                homeScore: isVoid ? 0 : (homeWins ? 90 : 80),
-                awayScore: isVoid ? 0 : (homeWins ? 80 : 90),
+                homeScore: isVoid ? 0 : (homeWins ? 3 : 1), // volleyball sets
+                awayScore: isVoid ? 0 : (homeWins ? 1 : 3),
                 extraPeriods: 0,
                 sourceHash: keccak256(abi.encode(gameId)),
                 attestationId: "invariant"

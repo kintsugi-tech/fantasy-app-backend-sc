@@ -31,7 +31,10 @@ abstract contract M2Base is Test {
     uint64 internal constant FINALIZATION_DELAY = 24 hours;
     uint64 internal constant T0 = 1_800_000_000;
 
-    bytes32 internal constant LEAGUE = keccak256("mbl-2026-27-main");
+    bytes32 internal constant LEAGUE = keccak256("mvl-2026-27-main");
+
+    /// @dev Volleyball, best of 5: the winner is the first to 3 sets.
+    uint8 internal constant VOLLEYBALL_SETS = 3;
 
     uint256 private _nextGame;
 
@@ -48,7 +51,7 @@ abstract contract M2Base is Test {
     // --- fixtures ----------------------------------------------------------
 
     function _gameId(uint256 n) internal pure returns (bytes32) {
-        return keccak256(bytes(string.concat("mbl-2026-27-", vm.toString(n))));
+        return keccak256(bytes(string.concat("mvl-2026-27-", vm.toString(n))));
     }
 
     function _homeTeam(uint256 n) internal pure returns (bytes32) {
@@ -59,10 +62,9 @@ abstract contract M2Base is Test {
         return keccak256(abi.encode("away", n));
     }
 
-    /// @dev Registers `count` new games starting at `startTime`, with an open score and no draws
-    ///      (basketball).
+    /// @dev Registers `count` new volleyball games starting at `startTime`.
     function _registerGames(uint256 count, uint64 startTime) internal returns (bytes32[] memory ids) {
-        return _registerGames(count, startTime, 0, false);
+        return _registerGames(count, startTime, VOLLEYBALL_SETS, false);
     }
 
     /// @dev Registers `count` new games starting at `startTime`, in the given format.
@@ -125,12 +127,12 @@ abstract contract M2Base is Test {
             awayScore: awayScore,
             extraPeriods: 0,
             sourceHash: sha256(abi.encode(gameId, homeScore, awayScore)),
-            attestationId: "mbl_2026_game-0001"
+            attestationId: "mvl_2026_game-0001"
         });
     }
 
-    /// @dev A valid final result for the game's format: 88-80 / 75-91 with an open score,
-    ///      N-(N-1) / 0-N in a race to N sets.
+    /// @dev A valid final result for the game's format: N-(N-1) / 0-N in a race to N sets
+    ///      (volleyball: 3-2 / 0-3), 88-80 / 75-91 with an open score.
     function _final(bytes32 gameId, bool homeWins) internal view returns (IResultsRegistry.ResultInput memory) {
         uint16 target = registry.getGame(gameId).targetScore;
         if (target != 0) {

@@ -23,24 +23,18 @@ export type Pick = (typeof PICK)[keyof typeof PICK]
 export const OUTCOME = { NOT_COUNTED: 0, HOME: 1, AWAY: 2, DRAW: 3 } as const
 
 /**
- * Game formats for ResultsRegistry.registerGames (GameInfo.targetScore, GameInfo.drawAllowed).
- * The scores recorded are the unit that decides the winner: points, goals or sets.
+ * A game's format, registered with it (ResultsRegistry.GameInfo): targetScore 0 = open score (the
+ * side ahead wins), N = the first side to reach N wins; drawAllowed only with an open score.
+ * The scores recorded are the unit that decides the winner (e.g. sets in volleyball).
  */
-export const GAME_FORMAT = {
-  basketball: { targetScore: 0, drawAllowed: false }, // points
-  football: { targetScore: 0, drawAllowed: true }, // goals, league match
-  volleyball: { targetScore: 3, drawAllowed: false }, // sets, best of 5
-  beachVolleyball: { targetScore: 2, drawAllowed: false }, // sets, best of 3
-} as const
-export type Sport = keyof typeof GAME_FORMAT
 export type GameFormat = { targetScore: number; drawAllowed: boolean }
 
 // --- identifiers ------------------------------------------------------------------------------
 
-/** gameId = keccak256(bytes(canonicalGameId)), e.g. "mbl-2026-27-000123". */
+/** gameId = keccak256(bytes(canonicalGameId)), e.g. "mvl-2026-27-000123". */
 export const gameIdOf = (canonicalGameId: string): Hex => keccak256(stringToHex(canonicalGameId))
 
-/** leagueId = keccak256(bytes(slug)), e.g. "mbl-2026-27-main". */
+/** leagueId = keccak256(bytes(slug)), e.g. "mvl-2026-27-main". */
 export const leagueIdOf = (slug: string): Hex => keccak256(stringToHex(slug))
 
 /** Team codes are bytes32 short strings (<= 31 bytes), like Solidity's bytes32("UB_BRONCOS"). */

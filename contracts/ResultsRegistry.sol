@@ -7,10 +7,10 @@ import {Pausable} from "@openzeppelin/contracts/utils/Pausable.sol";
 import {IResultsRegistry} from "./interfaces/IResultsRegistry.sol";
 
 /// @title ResultsRegistry
-/// @notice Per-game results of the real-world competition, for any head-to-head sport (volleyball,
-///         basketball, football, tennis…), keyed by game so that one file per game or one file per
-///         matchday makes no difference. Each game is registered with its format (`targetScore`,
-///         `drawAllowed`), which is what a result is checked against.
+/// @notice Per-game results of the real-world competition (volleyball), keyed by game so that one
+///         file per game or one file per matchday makes no difference. Each game is registered with
+///         its format (`targetScore`, `drawAllowed`), which is what a result is checked against: so
+///         another head-to-head sport needs no change here.
 ///
 ///         Lifecycle of a game:
 ///           registerGames (operator)  ->  Scheduled

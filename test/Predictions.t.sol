@@ -561,13 +561,14 @@ contract PredictionsTest is M2Base {
         assertEq((outcomes >> 58) & 3, 1); // game 30 (index 29): home win
     }
 
-    /// Football 1X2: a draw pick scores on a drawn game. On a game without draws it is accepted
-    /// but can never match, since the registry never records a draw there.
+    /// A format with draws (open score; not volleyball, but no contract change needed): a draw pick
+    /// scores on a drawn game. On a game without draws it is accepted but can never match, since
+    /// the registry never records a draw there.
     function test_DrawPicks() public {
         uint64 lock = lockTime + 1 days;
-        bytes32[] memory football = _registerGames(2, lock, 0, true);
+        bytes32[] memory withDraws = _registerGames(2, lock, 0, true);
         bytes32[] memory ids = new bytes32[](3);
-        (ids[0], ids[1], ids[2]) = (football[0], football[1], _registerGames(1, lock)[0]);
+        (ids[0], ids[1], ids[2]) = (withDraws[0], withDraws[1], _registerGames(1, lock)[0]);
         bytes32 round2 = _scheduleRound(2, ids, opensAt, lock);
 
         _submit(aliceKey, alice, round2, _picks(D, D, D));
@@ -593,7 +594,7 @@ contract PredictionsTest is M2Base {
     function test_ForfeitCounts() public {
         _submit(aliceKey, alice, roundId, _picks(A, A, A));
         vm.warp(lockTime + 3 hours);
-        _record(_result(games[0], IResultsRegistry.GameStatus.Forfeit, IResultsRegistry.Side.Away, 0, 20));
+        _record(_result(games[0], IResultsRegistry.GameStatus.Forfeit, IResultsRegistry.Side.Away, 0, 3));
         _record(_final(games[1], false));
         _record(_final(games[2], true));
         _finalizeRound(roundId);
