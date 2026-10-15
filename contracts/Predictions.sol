@@ -19,10 +19,12 @@ import {PicksLib} from "./libraries/PicksLib.sol";
 ///           with the user's (custodial) key and our relayer submits it, paying the gas.
 ///         - Picks are stored in clear, so the layer-0 score of any user is recomputable on-chain
 ///           (`scoreOf`, `leagueStatsOf`) from these picks and the ResultsRegistry outcomes.
-///         - A round settles `finalizationDelay` after its last result: results are final when
-///           recorded, and in that window the steward can still cancel a round built on a wrong one.
+///         - A round settles `finalizationDelay` after its last result, and never while one of its
+///           results can still be corrected (ResultsRegistry.correctableUntil). In that window the
+///           steward corrects a wrong result, or cancels the round as a last resort.
 ///         - Final standings, a Merkle root, are proposed by the steward after the last round
 ///           (`proposeStandings`, replaceable) and anchored once 48 h later (`finalizeLeague`).
+///           Once proposed, the league takes no new round.
 ///           Anyone can check a row against them and against the chain (`checkStanding`).
 ///         - Pause: the steward stops everything but `cancelRound` in minutes; only the admin
 ///           (cold wallet) resumes.
@@ -121,6 +123,7 @@ contract Predictions is IPredictions, AccessControlDefaultAdminRules, Pausable, 
     error NoStandingsProposal(bytes32 leagueId);
     error ReviewPeriodOpen(bytes32 leagueId, uint64 finalizableAt);
     error StandingsOutdated(bytes32 leagueId);
+    error StandingsAlreadyProposed(bytes32 leagueId);
     error EmptyBatch();
     error BatchTooLarge(uint256 size, uint256 max);
     error SubmissionRejected(address user, SubmitStatus status);
@@ -198,7 +201,7 @@ contract Predictions is IPredictions, AccessControlDefaultAdminRules, Pausable, 
     /// @notice Schedule a round. Its game list is immutable and its id is never reused, so a
     ///         signature for a round can never be replayed onto different games.
     /// @dev All games must be registered in the ResultsRegistry, without a result, and must not
-    ///      start before `lockTime`.
+    ///      start before `lockTime`. No round once the league's standings are proposed.
     function scheduleRound(
         bytes32 leagueId,
         uint16 matchday,
@@ -208,6 +211,7 @@ contract Predictions is IPredictions, AccessControlDefaultAdminRules, Pausable, 
     ) external onlyRole(OPERATOR_ROLE) whenNotPaused returns (bytes32 roundId) {
         League storage l = _leagues[leagueId];
         if (!l.exists || l.finalized) revert LeagueNotActive(leagueId);
+        if (_proposals[leagueId].proposedAt != 0) revert StandingsAlreadyProposed(leagueId);
         if (l.roundCount >= MAX_ROUNDS_PER_LEAGUE) revert TooManyRounds(leagueId);
         roundId = roundIdOf(leagueId, matchday);
         if (_rounds[roundId].state != RoundState.None) revert RoundExists(roundId);
@@ -309,17 +313,16 @@ contract Predictions is IPredictions, AccessControlDefaultAdminRules, Pausable, 
     // Settlement
     // ---------------------------------------------------------------------
 
-    /// @notice Snapshot the outcomes of a locked round once all its games are final in the
-    ///         ResultsRegistry and `finalizationDelay` has passed since the last of them was
-    ///         recorded. Permissionless: it is deterministic.
+    /// @notice Snapshot the outcomes of a locked round once all its games have a result in the
+    ///         ResultsRegistry, none of them can be corrected any more and `finalizationDelay` has
+    ///         passed since the last of them was recorded. Permissionless: it is deterministic.
     function finalizeRound(bytes32 roundId) external whenNotPaused {
         Round storage r = _rounds[roundId];
         if (r.state != RoundState.Scheduled) revert RoundNotActive(roundId);
         if (block.timestamp < r.lockTime) revert RoundNotLocked(roundId);
 
-        (uint64 outcomes, uint64 lastRecordedAt, bytes32 pending) = _outcomes(roundId, r.lockTime);
+        (uint64 outcomes, uint64 readyAt, bytes32 pending) = _outcomes(roundId, r.lockTime);
         if (pending != bytes32(0)) revert GameNotFinal(pending);
-        uint64 readyAt = lastRecordedAt + finalizationDelay;
         if (block.timestamp < readyAt) revert FinalizationPending(roundId, readyAt);
 
         r.outcomes = outcomes;
@@ -342,7 +345,8 @@ contract Predictions is IPredictions, AccessControlDefaultAdminRules, Pausable, 
 
     /// @notice Propose the final standings once every round is finalized or cancelled. They are
     ///         public for STANDINGS_REVIEW_PERIOD before finalizeLeague can anchor them; a new
-    ///         proposal replaces the previous one and restarts the period.
+    ///         proposal replaces the previous one and restarts the period. From the first proposal
+    ///         on, the league takes no new round: the season is over.
     /// @param standingsRoot OZ StandardMerkleTree root of StandingLeaf rows
     ///        (bytes32 leagueId, address account, uint32 rank, uint32 points, uint32 correct,
     ///         uint32 counted, uint16 roundsPlayed, uint64 sumLeadTime)
@@ -386,8 +390,8 @@ contract Predictions is IPredictions, AccessControlDefaultAdminRules, Pausable, 
         if (p.proposedAt == 0) revert NoStandingsProposal(leagueId);
         uint64 finalizableAt_ = p.proposedAt + STANDINGS_REVIEW_PERIOD;
         if (block.timestamp < finalizableAt_) revert ReviewPeriodOpen(leagueId, finalizableAt_);
-        // Every round was settled at proposal time and settled rounds never change, so only a
-        // round scheduled since then can make the standings incomplete.
+        // Every round was settled at proposal time and settled rounds never change. scheduleRound
+        // refuses new rounds once standings are proposed, so this only guards that invariant.
         if (l.roundCount != p.roundCount) revert StandingsOutdated(leagueId);
 
         l.finalized = true;
@@ -466,13 +470,12 @@ contract Predictions is IPredictions, AccessControlDefaultAdminRules, Pausable, 
     }
 
     /// @notice Earliest time `finalizeRound` can succeed, or 0 while the round is not scheduled or
-    ///         one of its games has no result yet.
+    ///         one of its games has no result yet. A correction of one of its results moves it.
     function finalizableAt(bytes32 roundId) external view returns (uint64) {
         Round storage r = _rounds[roundId];
         if (r.state != RoundState.Scheduled) return 0;
-        (, uint64 lastRecordedAt, bytes32 pending) = _outcomes(roundId, r.lockTime);
+        (, uint64 readyAt, bytes32 pending) = _outcomes(roundId, r.lockTime);
         if (pending != bytes32(0)) return 0;
-        uint64 readyAt = lastRecordedAt + finalizationDelay;
         return readyAt > r.lockTime ? readyAt : r.lockTime;
     }
 
@@ -540,19 +543,25 @@ contract Predictions is IPredictions, AccessControlDefaultAdminRules, Pausable, 
     // Internal
     // ---------------------------------------------------------------------
 
-    /// @dev Outcomes of a round's games (2 bits each) and the latest time one of them was recorded.
-    ///      `pending` is the first game without a result, or 0 when all are final. A game counts
+    /// @dev Outcomes of a round's games (2 bits each) and the time the round can settle: the
+    ///      latest of each game's `recordedAt + finalizationDelay` and `correctableUntil`, so a
+    ///      result that can still change never settles, whatever the two windows are set to.
+    ///      `pending` is the first game without a result, or 0 when all have one. A game counts
     ///      only if it was played or forfeited and did not start before the lock.
     function _outcomes(
         bytes32 roundId,
         uint64 lockTime
-    ) private view returns (uint64 outcomes, uint64 lastRecordedAt, bytes32 pending) {
+    ) private view returns (uint64 outcomes, uint64 readyAt, bytes32 pending) {
         bytes32[] storage gameIds = _roundGames[roundId];
+        uint64 delay = finalizationDelay;
         for (uint256 i = 0; i < gameIds.length; ++i) {
             (IResultsRegistry.GameStatus status, IResultsRegistry.Side winner, uint64 startTime, uint64 recordedAt) = registry
                 .outcomeOf(gameIds[i]);
             if (recordedAt == 0) return (0, 0, gameIds[i]);
-            if (recordedAt > lastRecordedAt) lastRecordedAt = recordedAt;
+            uint64 gameReadyAt = recordedAt + delay;
+            uint64 correctable = registry.correctableUntil(gameIds[i]);
+            if (correctable > gameReadyAt) gameReadyAt = correctable;
+            if (gameReadyAt > readyAt) readyAt = gameReadyAt;
             bool counts = (status == IResultsRegistry.GameStatus.Final ||
                 status == IResultsRegistry.GameStatus.Forfeit) && startTime >= lockTime;
             if (counts) outcomes |= uint64(uint8(winner)) << uint8(2 * i); // i < MAX_GAMES

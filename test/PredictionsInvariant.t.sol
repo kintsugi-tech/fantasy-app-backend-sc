@@ -11,8 +11,9 @@ import {M2Base} from "./utils/M2Base.sol";
 
 /// @dev Drives random sequences against one league of 3 rounds of 3 games: submissions (valid or
 ///      not, with confirmedAt up to MAX_CLOCK_SKEW ahead), time jumps, game moves, lock moves,
-///      results (Final or Void, game by game), cancellations and finalization. The combinations of
-///      these, not each function alone, are what the invariants check.
+///      results (Final or Void, game by game), steward corrections, admin changes of the two
+///      settlement windows, cancellations and finalization. The combinations of these, not each
+///      function alone, are what the invariants check.
 contract PredictionsHandler is Test {
     uint256 internal constant GAMES = 3;
 
@@ -22,6 +23,7 @@ contract PredictionsHandler is Test {
     address internal immutable submitter;
     address internal immutable resultsRelayer;
     address internal immutable steward;
+    address internal immutable admin;
 
     bytes32[] public roundIds;
     mapping(bytes32 roundId => bytes32[]) internal _games;
@@ -39,13 +41,13 @@ contract PredictionsHandler is Test {
     constructor(
         Predictions predictions_,
         ResultsRegistry registry_,
-        address[4] memory roles, // operator, submitter, results relayer, steward
+        address[5] memory roles, // operator, submitter, results relayer, steward, admin
         bytes32[] memory roundIds_,
         bytes32[][] memory games_
     ) {
         predictions = predictions_;
         registry = registry_;
-        (operator, submitter, resultsRelayer, steward) = (roles[0], roles[1], roles[2], roles[3]);
+        (operator, submitter, resultsRelayer, steward, admin) = (roles[0], roles[1], roles[2], roles[3], roles[4]);
         for (uint256 r = 0; r < roundIds_.length; ++r) {
             roundIds.push(roundIds_[r]);
             _games[roundIds_[r]] = games_[r];
@@ -141,24 +143,33 @@ contract PredictionsHandler is Test {
             bytes32 gameId = _games[roundId][i];
             IResultsRegistry.Game memory g = registry.getGame(gameId);
             if (g.status != IResultsRegistry.GameStatus.Scheduled || block.timestamp < g.startTime) continue;
-            bool isVoid = (voidBits >> i) & 1 == 1;
-            bool homeWins = (winBits >> i) & 1 == 1;
             IResultsRegistry.ResultInput[] memory batch = new IResultsRegistry.ResultInput[](1);
-            batch[0] = IResultsRegistry.ResultInput({
-                gameId: gameId,
-                homeTeam: g.homeTeam,
-                awayTeam: g.awayTeam,
-                status: isVoid ? IResultsRegistry.GameStatus.Void : IResultsRegistry.GameStatus.Final,
-                winner: isVoid ? IResultsRegistry.Side.None : (homeWins ? IResultsRegistry.Side.Home : IResultsRegistry.Side.Away),
-                homeScore: isVoid ? 0 : (homeWins ? 3 : 1), // volleyball sets
-                awayScore: isVoid ? 0 : (homeWins ? 1 : 3),
-                extraPeriods: 0,
-                sourceHash: keccak256(abi.encode(gameId)),
-                attestationId: "invariant"
-            });
+            batch[0] = _input(gameId, g, (voidBits >> i) & 1 == 1, (winBits >> i) & 1 == 1);
             vm.prank(resultsRelayer);
             registry.recordResults(batch);
         }
+    }
+
+    /// The steward corrects a game while it can still be corrected: a void becomes a result, a
+    /// result flips its winner or becomes a void.
+    function correctResult(uint256 roundSeed, uint256 gameSeed, bool toVoid) external {
+        bytes32 roundId = _round(roundSeed);
+        bytes32 gameId = _games[roundId][gameSeed % GAMES];
+        if (block.timestamp >= registry.correctableUntil(gameId)) return; // 0: no result or corrected
+        IResultsRegistry.Game memory g = registry.getGame(gameId);
+        bool isVoid = g.status == IResultsRegistry.GameStatus.Void ? false : toVoid;
+        IResultsRegistry.ResultInput memory r = _input(gameId, g, isVoid, g.winner != IResultsRegistry.Side.Home);
+        vm.prank(steward);
+        registry.correctResult(r, "invariant");
+    }
+
+    /// The admin sets both windows anywhere in their ranges, in either order: a round must never
+    /// settle while one of its results can still be corrected.
+    function setWindows(uint32 delaySeed, uint32 windowSeed) external {
+        vm.startPrank(admin);
+        predictions.setFinalizationDelay(1 hours + uint64(delaySeed % (7 days - 1 hours + 1)));
+        registry.setCorrectionWindow(1 hours + uint64(windowSeed % (7 days - 1 hours + 1)));
+        vm.stopPrank();
     }
 
     /// Rare on purpose, so that most runs also reach finalization.
@@ -184,6 +195,29 @@ contract PredictionsHandler is Test {
     function _round(uint256 seed) internal view returns (bytes32) {
         return roundIds[seed % roundIds.length];
     }
+
+    function _input(
+        bytes32 gameId,
+        IResultsRegistry.Game memory g,
+        bool isVoid,
+        bool homeWins
+    ) internal pure returns (IResultsRegistry.ResultInput memory) {
+        return
+            IResultsRegistry.ResultInput({
+                gameId: gameId,
+                homeTeam: g.homeTeam,
+                awayTeam: g.awayTeam,
+                status: isVoid ? IResultsRegistry.GameStatus.Void : IResultsRegistry.GameStatus.Final,
+                winner: isVoid
+                    ? IResultsRegistry.Side.None
+                    : (homeWins ? IResultsRegistry.Side.Home : IResultsRegistry.Side.Away),
+                homeScore: isVoid ? 0 : (homeWins ? 3 : 1), // volleyball sets
+                awayScore: isVoid ? 0 : (homeWins ? 1 : 3),
+                extraPeriods: 0,
+                sourceHash: keccak256(abi.encode(gameId)),
+                attestationId: "invariant"
+            });
+    }
 }
 
 contract PredictionsInvariantTest is M2Base {
@@ -202,12 +236,12 @@ contract PredictionsInvariantTest is M2Base {
         handler = new PredictionsHandler(
             predictions,
             registry,
-            [operator, submitter, resultsRelayer, steward],
+            [operator, submitter, resultsRelayer, steward, admin],
             roundIds,
             games
         );
         targetContract(address(handler));
-        bytes4[] memory actions = new bytes4[](7);
+        bytes4[] memory actions = new bytes4[](9);
         actions[0] = PredictionsHandler.submit.selector;
         actions[1] = PredictionsHandler.advance.selector;
         actions[2] = PredictionsHandler.rescheduleGame.selector;
@@ -215,6 +249,8 @@ contract PredictionsInvariantTest is M2Base {
         actions[4] = PredictionsHandler.recordResults.selector;
         actions[5] = PredictionsHandler.cancelRound.selector;
         actions[6] = PredictionsHandler.finalize.selector;
+        actions[7] = PredictionsHandler.correctResult.selector;
+        actions[8] = PredictionsHandler.setWindows.selector;
         targetSelector(FuzzSelector({addr: address(handler), selectors: actions})); // not the getters
     }
 
@@ -282,6 +318,24 @@ contract PredictionsInvariantTest is M2Base {
                 bool counted = (round.outcomes >> (2 * i)) & 3 != 0;
                 assertEq(counted, played && g.startTime >= round.lockTime);
                 if (played && handler.lockedIn(handler.gameOf(roundId, i))) assertTrue(counted, "played after lock");
+            }
+        }
+    }
+
+    /// A finalized round's snapshot is exactly what the registry says today: no result of its
+    /// games changed after it settled, so no correction ever came too late.
+    function invariant_FinalizedRoundsMatchTheRegistry() public view {
+        for (uint256 r = 0; r < handler.roundsLength(); ++r) {
+            bytes32 roundId = handler.roundIds(r);
+            Predictions.Round memory round = predictions.getRound(roundId);
+            if (round.state != Predictions.RoundState.Finalized) continue;
+            for (uint256 i = 0; i < 3; ++i) {
+                bytes32 gameId = handler.gameOf(roundId, i);
+                IResultsRegistry.Game memory g = registry.getGame(gameId);
+                bool counts = (g.status == IResultsRegistry.GameStatus.Final ||
+                    g.status == IResultsRegistry.GameStatus.Forfeit) && g.startTime >= round.lockTime;
+                assertEq((round.outcomes >> (2 * i)) & 3, counts ? uint8(g.winner) : 0, "outcome changed after settling");
+                assertEq(registry.correctableUntil(gameId) <= block.timestamp, true, "settled while correctable");
             }
         }
     }

@@ -457,6 +457,58 @@ contract PredictionsTest is M2Base {
         _assertScore(alice, 0, 0);
     }
 
+    /// A wrong result is corrected instead of cancelling the round: the corrected result gets a
+    /// full delay of its own and the round scores on it.
+    function test_CorrectionKeepsTheRoundAndRestartsTheDelay() public {
+        _submit(aliceKey, alice, roundId, _picks(H, H, H));
+        vm.warp(lockTime + 3 hours);
+        _settleGames(games, _bools(true, true, false)); // game 3 parsed with the sides swapped
+        uint64 firstReadyAt = uint64(block.timestamp) + FINALIZATION_DELAY;
+        assertEq(predictions.finalizableAt(roundId), firstReadyAt);
+
+        IResultsRegistry.ResultInput memory right = _final(games[2], true);
+        vm.warp(block.timestamp + CORRECTION_WINDOW - 1);
+        vm.prank(steward);
+        registry.correctResult(right, "home and away swapped by the parser");
+        uint64 readyAt = uint64(block.timestamp) + FINALIZATION_DELAY;
+        assertEq(predictions.finalizableAt(roundId), readyAt);
+
+        vm.warp(firstReadyAt);
+        vm.expectRevert(abi.encodeWithSelector(Predictions.FinalizationPending.selector, roundId, readyAt));
+        predictions.finalizeRound(roundId);
+        vm.warp(readyAt);
+        predictions.finalizeRound(roundId);
+        _assertScore(alice, 3, 3);
+    }
+
+    /// Whatever the two windows are set to, a round never settles while one of its results can
+    /// still be corrected: the snapshot can never miss a correction.
+    function test_RoundWaitsForTheCorrectionWindow() public {
+        vm.prank(admin);
+        registry.setCorrectionWindow(3 days);
+        vm.warp(lockTime + 3 hours);
+        _settleGames(games, _bools(true, true, true));
+        uint64 correctableUntil = uint64(block.timestamp) + 3 days;
+        assertEq(registry.correctableUntil(games[0]), correctableUntil);
+        assertEq(predictions.finalizableAt(roundId), correctableUntil);
+
+        vm.warp(block.timestamp + FINALIZATION_DELAY);
+        vm.expectRevert(abi.encodeWithSelector(Predictions.FinalizationPending.selector, roundId, correctableUntil));
+        predictions.finalizeRound(roundId);
+
+        // Correcting each game closes its window: the round then waits only the delay.
+        for (uint256 i = 0; i < 3; ++i) {
+            IResultsRegistry.ResultInput memory r = _final(games[i], false);
+            vm.prank(steward);
+            registry.correctResult(r, "wrong file");
+        }
+        uint64 readyAt = uint64(block.timestamp) + FINALIZATION_DELAY;
+        assertEq(predictions.finalizableAt(roundId), readyAt);
+        vm.warp(readyAt);
+        predictions.finalizeRound(roundId);
+        assertEq(predictions.getRound(roundId).outcomes, uint64(2 | (2 << 2) | (2 << 4)));
+    }
+
     function test_SetFinalizationDelay() public {
         bytes32 role = predictions.DEFAULT_ADMIN_ROLE();
         vm.prank(steward);
@@ -473,10 +525,13 @@ contract PredictionsTest is M2Base {
         predictions.setFinalizationDelay(1 hours);
         vm.stopPrank();
 
-        // It applies to rounds already waiting.
+        // It applies to rounds already waiting, and never settles one while a result is correctable.
         vm.warp(lockTime + 3 hours);
         _settleGames(games, _bools(true, true, true));
-        assertEq(predictions.finalizableAt(roundId), lockTime + 4 hours);
+        assertEq(predictions.finalizableAt(roundId), lockTime + 3 hours + CORRECTION_WINDOW);
+        vm.prank(admin);
+        predictions.setFinalizationDelay(20 hours);
+        assertEq(predictions.finalizableAt(roundId), lockTime + 23 hours);
     }
 
     // --- finalizeRound & scoring -------------------------------------------------
@@ -772,9 +827,9 @@ contract PredictionsTest is M2Base {
         assertEq(predictions.getLeague(LEAGUE).reportHash, keccak256("report2"));
     }
 
-    /// A round scheduled after the proposal is not in the proposed standings: they cannot be
-    /// finalized, even once that round is settled, until the steward proposes again.
-    function test_RoundAddedDuringReviewOutdatesTheProposal() public {
+    /// Proposing the standings ends the season: no round can be added after it, whether the
+    /// proposal was replaced or not, so the operator can never hold up finalizeLeague.
+    function test_NoRoundOnceStandingsProposed() public {
         vm.warp(lockTime + 3 hours);
         _settleGames(games, _bools(true, true, true));
         _finalizeRound(roundId);
@@ -783,19 +838,19 @@ contract PredictionsTest is M2Base {
 
         uint64 lock2 = uint64(block.timestamp) + 1 hours;
         bytes32[] memory more = _registerGames(1, lock2);
-        bytes32 round2 = _scheduleRound(2, more, uint64(block.timestamp), lock2);
-        vm.warp(lock2 + 3 hours);
-        _record(_final(more[0], true));
-        _finalizeRound(round2);
-        vm.warp(block.timestamp + 48 hours);
+        vm.prank(operator);
+        vm.expectRevert(abi.encodeWithSelector(Predictions.StandingsAlreadyProposed.selector, LEAGUE));
+        predictions.scheduleRound(LEAGUE, 2, uint64(block.timestamp), lock2, more);
 
-        vm.startPrank(steward);
-        vm.expectRevert(abi.encodeWithSelector(Predictions.StandingsOutdated.selector, LEAGUE));
-        predictions.finalizeLeague(LEAGUE);
+        vm.prank(steward);
         predictions.proposeStandings(LEAGUE, keccak256("root2"), 10, bytes32(0), "");
+        vm.prank(operator);
+        vm.expectRevert(abi.encodeWithSelector(Predictions.StandingsAlreadyProposed.selector, LEAGUE));
+        predictions.scheduleRound(LEAGUE, 2, uint64(block.timestamp), lock2, more);
+
         vm.warp(block.timestamp + 48 hours);
+        vm.prank(steward);
         predictions.finalizeLeague(LEAGUE);
-        vm.stopPrank();
         assertEq(predictions.getLeague(LEAGUE).standingsRoot, keccak256("root2"));
     }
 

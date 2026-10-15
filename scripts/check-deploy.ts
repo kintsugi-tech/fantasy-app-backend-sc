@@ -39,6 +39,7 @@ const p = {
   adminDelay: BigInt(raw.adminDelay),
   postponeWindow: bigintParam('postponeWindow', 7n * 24n * 3600n),
   finalizationDelay: bigintParam('finalizationDelay', 24n * 3600n),
+  correctionWindow: bigintParam('correctionWindow', 24n * 3600n),
   operator: getAddress(String(raw.operator)),
   resultsRelayer: getAddress(String(raw.resultsRelayer)),
   submitter: getAddress(String(raw.submitter)),
@@ -133,6 +134,11 @@ check(
   (await predictions.read.finalizationDelay()) === p.finalizationDelay,
   `finalizationDelay is ${p.finalizationDelay} s`,
 )
+check((await registry.read.correctionWindow()) === p.correctionWindow, `correctionWindow is ${p.correctionWindow} s`)
+if (p.correctionWindow > p.finalizationDelay) {
+  // Safe (rounds wait for correctableUntil), but every round then settles correctionWindow after its last result.
+  console.log(`note  correctionWindow (${p.correctionWindow} s) is longer than finalizationDelay: it sets when rounds settle`)
+}
 if (deployer) {
   console.log(`note  deployer ${deployer} checked above: it holds only what the parameters give it`)
 } else {

@@ -56,7 +56,7 @@ interface IResultsRegistry {
         bytes32 homeTeam;
         bytes32 awayTeam;
         uint64 startTime;
-        uint64 recordedAt; // 0 while no result; once set, the result is final
+        uint64 recordedAt; // 0 while no result; set again by a correction
         GameStatus status;
         Side winner;
         uint16 homeScore;
@@ -64,13 +64,21 @@ interface IResultsRegistry {
         uint8 extraPeriods;
         uint8 targetScore;
         bool drawAllowed;
-        bytes32 sourceHash; // the attestation id is in the ResultRecorded event
+        bytes32 sourceHash; // the attestation id is in the ResultRecorded / ResultCorrected event
+        uint48 correctableUntil; // set with the result (recordedAt + correctionWindow); 0 once corrected
+        bool corrected; // the steward corrected the result: it can never change again
     }
 
     function getGame(bytes32 gameId) external view returns (Game memory);
 
-    /// @notice Whether the game has a result (or was voided). Results never change once recorded.
+    /// @notice Whether the game has a result (or was voided). The steward may still correct it once,
+    ///         until `correctableUntil`.
     function isFinal(bytes32 gameId) external view returns (bool);
+
+    /// @notice Until when the steward may correct the game's result: 0 while it has no result or
+    ///         once it was corrected, after which the result never changes. Fixed when the result
+    ///         is written, so a later change of the correction window never reopens it.
+    function correctableUntil(bytes32 gameId) external view returns (uint64);
 
     /// @notice Compact view (one slot) used by Predictions to schedule and settle rounds.
     ///         `recordedAt` is 0 until the game has a result or was voided.

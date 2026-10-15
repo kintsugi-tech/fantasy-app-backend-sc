@@ -470,6 +470,180 @@ contract ResultsRegistryTest is M2Base {
         registry.voidGame(game, "has a result");
     }
 
+    // --- correctResult ---------------------------------------------------------
+
+    /// A parser bug is corrected from the same attested file: same source, right result.
+    function test_CorrectResult() public {
+        vm.warp(startTime + 2 hours);
+        IResultsRegistry.ResultInput memory wrong = _final(game, true);
+        _record(wrong);
+        assertEq(registry.correctableUntil(game), startTime + 2 hours + CORRECTION_WINDOW);
+
+        vm.warp(startTime + 3 hours);
+        IResultsRegistry.ResultInput memory right = _final(game, false);
+        right.sourceHash = wrong.sourceHash;
+        vm.expectEmit(address(registry));
+        emit ResultsRegistry.ResultCorrected(
+            game,
+            IResultsRegistry.GameStatus.Final,
+            IResultsRegistry.Side.Away,
+            0,
+            VOLLEYBALL_SETS,
+            0,
+            wrong.sourceHash,
+            right.attestationId,
+            "home and away swapped by the parser"
+        );
+        vm.prank(steward);
+        registry.correctResult(right, "home and away swapped by the parser");
+
+        IResultsRegistry.Game memory g = registry.getGame(game);
+        assertEq(uint8(g.status), uint8(IResultsRegistry.GameStatus.Final));
+        assertEq(uint8(g.winner), uint8(IResultsRegistry.Side.Away));
+        assertEq(g.homeScore, 0);
+        assertEq(g.awayScore, VOLLEYBALL_SETS);
+        assertEq(g.recordedAt, startTime + 3 hours);
+        assertTrue(g.corrected);
+        assertEq(g.correctableUntil, 0);
+        assertTrue(registry.isFinal(game));
+        assertEq(registry.correctableUntil(game), 0); // can never change again
+    }
+
+    function test_CorrectableUntilWithoutResult() public view {
+        assertEq(registry.correctableUntil(game), 0);
+        assertEq(registry.correctableUntil(keccak256("unknown")), 0);
+    }
+
+    /// The deadline is fixed with the result: widening the window later never reopens it (a round
+    /// already settled on that result must not see it change), narrowing it never cuts it short.
+    function test_WindowChangeAppliesToLaterResults() public {
+        vm.warp(startTime + 2 hours);
+        _record(_final(game, true));
+        uint64 deadline = startTime + 2 hours + CORRECTION_WINDOW;
+        vm.prank(admin);
+        registry.setCorrectionWindow(7 days);
+        assertEq(registry.correctableUntil(game), deadline);
+
+        IResultsRegistry.ResultInput memory r = _final(game, false);
+        vm.warp(deadline);
+        vm.prank(steward);
+        vm.expectRevert(abi.encodeWithSelector(ResultsRegistry.CorrectionWindowClosed.selector, game, deadline));
+        registry.correctResult(r, "reopened?");
+
+        bytes32 later = _registerGames(1, uint64(block.timestamp) + 1 hours)[0];
+        vm.warp(block.timestamp + 2 hours);
+        _record(_final(later, true));
+        assertEq(registry.correctableUntil(later), block.timestamp + 7 days);
+    }
+
+    function test_VoidOpensTheCorrectionWindow() public {
+        vm.warp(startTime + POSTPONE + 1);
+        vm.prank(steward);
+        registry.voidGame(game, "no result");
+        assertEq(registry.correctableUntil(game), block.timestamp + CORRECTION_WINDOW);
+    }
+
+    function test_CorrectOnlySteward() public {
+        vm.warp(startTime + 2 hours);
+        _record(_final(game, true));
+        bytes32 role = registry.STEWARD_ROLE();
+        IResultsRegistry.ResultInput memory r = _final(game, false);
+        address[3] memory others = [resultsRelayer, operator, admin];
+        for (uint256 i = 0; i < others.length; ++i) {
+            vm.prank(others[i]);
+            vm.expectRevert(abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, others[i], role));
+            registry.correctResult(r, "not mine");
+        }
+    }
+
+    function test_CorrectNeedsAResult() public {
+        IResultsRegistry.ResultInput memory r = _final(game, false);
+        vm.prank(steward);
+        vm.expectRevert(abi.encodeWithSelector(ResultsRegistry.NoResult.selector, game));
+        registry.correctResult(r, "no result yet");
+    }
+
+    function test_CorrectOnlyWithinTheWindow() public {
+        vm.warp(startTime + 2 hours);
+        _record(_final(game, true));
+        uint64 deadline = startTime + 2 hours + CORRECTION_WINDOW;
+        IResultsRegistry.ResultInput memory r = _final(game, false);
+        vm.warp(deadline);
+        vm.prank(steward);
+        vm.expectRevert(abi.encodeWithSelector(ResultsRegistry.CorrectionWindowClosed.selector, game, deadline));
+        registry.correctResult(r, "too late");
+    }
+
+    /// One correction: if it is wrong too, cancelling the round is what remains.
+    function test_CorrectOnlyOnce() public {
+        vm.warp(startTime + 2 hours);
+        IResultsRegistry.ResultInput memory first = _final(game, true);
+        IResultsRegistry.ResultInput memory second = _final(game, false);
+        _record(first);
+        vm.startPrank(steward);
+        registry.correctResult(second, "first");
+        vm.expectRevert(abi.encodeWithSelector(ResultsRegistry.AlreadyCorrected.selector, game));
+        registry.correctResult(first, "second");
+        vm.stopPrank();
+    }
+
+    function test_CorrectRunsTheRecordChecks() public {
+        vm.warp(startTime + 2 hours);
+        _record(_final(game, true));
+        IResultsRegistry.ResultInput memory swapped = _final(game, false);
+        (swapped.homeTeam, swapped.awayTeam) = (swapped.awayTeam, swapped.homeTeam);
+        // not a race to 3
+        IResultsRegistry.ResultInput memory unfinished = _result(
+            game,
+            IResultsRegistry.GameStatus.Final,
+            IResultsRegistry.Side.Home,
+            2,
+            1
+        );
+        IResultsRegistry.ResultInput memory noSource = _final(game, false);
+        noSource.sourceHash = bytes32(0);
+
+        vm.startPrank(steward);
+        vm.expectRevert(abi.encodeWithSelector(ResultsRegistry.TeamsMismatch.selector, game));
+        registry.correctResult(swapped, "swapped teams");
+        vm.expectRevert(abi.encodeWithSelector(ResultsRegistry.InvalidResult.selector, game));
+        registry.correctResult(unfinished, "unfinished");
+        vm.expectRevert(abi.encodeWithSelector(ResultsRegistry.InvalidSource.selector, game));
+        registry.correctResult(noSource, "no source");
+        vm.stopPrank();
+
+        assertFalse(registry.getGame(game).corrected); // nothing written
+    }
+
+    /// A game voided by the steward (no result in time) is corrected once its result turns up.
+    function test_CorrectAVoidedGame() public {
+        IResultsRegistry.ResultInput memory r = _final(game, true);
+        vm.warp(startTime + POSTPONE + 1);
+        vm.startPrank(steward);
+        registry.voidGame(game, "no result");
+        registry.correctResult(r, "the result turned up");
+        vm.stopPrank();
+        assertEq(uint8(registry.getGame(game).status), uint8(IResultsRegistry.GameStatus.Final));
+    }
+
+    /// The remedy works while paused (e.g. the relayer is stopped) and the relayer can never
+    /// write over a correction.
+    function test_CorrectWhilePausedAndRelayerCannotOverwrite() public {
+        vm.warp(startTime + 2 hours);
+        IResultsRegistry.ResultInput memory first = _final(game, true);
+        IResultsRegistry.ResultInput memory right = _final(game, false);
+        _record(first);
+        vm.startPrank(steward);
+        registry.pause();
+        registry.correctResult(right, "while paused");
+        vm.stopPrank();
+        vm.prank(admin);
+        registry.unpause();
+
+        vm.expectRevert(abi.encodeWithSelector(ResultsRegistry.ResultAlreadyRecorded.selector, game));
+        this.recordAsRelayer(first);
+    }
+
     // --- admin -----------------------------------------------------------------
 
     function test_AdminParameterBounds() public {
@@ -479,8 +653,21 @@ contract ResultsRegistryTest is M2Base {
         vm.expectRevert(abi.encodeWithSelector(ResultsRegistry.DelayOutOfRange.selector, uint64(31 days)));
         registry.setPostponeWindow(31 days);
         registry.setPostponeWindow(2 days);
+        vm.expectRevert(abi.encodeWithSelector(ResultsRegistry.DelayOutOfRange.selector, uint64(1 hours - 1)));
+        registry.setCorrectionWindow(1 hours - 1);
+        vm.expectRevert(abi.encodeWithSelector(ResultsRegistry.DelayOutOfRange.selector, uint64(7 days + 1)));
+        registry.setCorrectionWindow(7 days + 1);
+        vm.expectEmit(address(registry));
+        emit ResultsRegistry.CorrectionWindowSet(2 hours);
+        registry.setCorrectionWindow(2 hours);
         vm.stopPrank();
         assertEq(registry.postponeWindow(), 2 days);
+        assertEq(registry.correctionWindow(), 2 hours);
+
+        bytes32 role = registry.DEFAULT_ADMIN_ROLE();
+        vm.prank(steward);
+        vm.expectRevert(abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, steward, role));
+        registry.setCorrectionWindow(3 hours);
     }
 
     // --- helpers ---------------------------------------------------------------

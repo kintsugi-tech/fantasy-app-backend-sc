@@ -14,19 +14,21 @@ import {IResultsRegistry} from "./interfaces/IResultsRegistry.sol";
 ///
 ///         Lifecycle of a game:
 ///           registerGames (operator)  ->  Scheduled
-///           recordResults (relayer)   ->  Final | Forfeit | Void, final as soon as it is written
-///                                         (never before the start time)
-///           voidGame (steward)        ->  Void, final (only when no result arrived within
+///           recordResults (relayer)   ->  Final | Forfeit | Void (never before the start time)
+///           voidGame (steward)        ->  Void (only when no result arrived within
 ///                                         `postponeWindow` after the start time)
+///           correctResult (steward)   ->  Final | Forfeit | Void, once, within `correctionWindow`
+///                                         of the result; after that the result never changes
 ///
 ///         Results come from LocalTruth attestations of an accredited institutional source: the
 ///         relayer verifies that the public file's SHA-256 equals the attested `sha256_pub` and
 ///         stores it as `sourceHash`, so anyone can re-check a stored result against the attested
-///         file. A recorded result never changes: there is no correction or challenge period.
-///         Predictions waits `finalizationDelay` after a round's last result before settling it,
-///         so the steward can still cancel a round built on a wrong result.
+///         file. A result written wrong (a parser bug, a wrong attestation) can be corrected once
+///         by the steward, with the same checks. Predictions settles a round only once none of its
+///         results can change and `finalizationDelay` has passed since the last of them.
 ///
-///         Pause: the steward stops every write in minutes; only the admin (cold wallet) resumes.
+///         Pause: the steward stops every write but `correctResult` in minutes; only the admin
+///         (cold wallet) resumes.
 contract ResultsRegistry is IResultsRegistry, AccessControlDefaultAdminRules, Pausable {
     bytes32 public constant OPERATOR_ROLE = keccak256("OPERATOR_ROLE");
     bytes32 public constant RESULTS_RELAYER_ROLE = keccak256("RESULTS_RELAYER_ROLE");
@@ -35,10 +37,17 @@ contract ResultsRegistry is IResultsRegistry, AccessControlDefaultAdminRules, Pa
     uint256 public constant MAX_BATCH = 100;
     uint64 public constant MIN_POSTPONE_WINDOW = 1 days;
     uint64 public constant MAX_POSTPONE_WINDOW = 30 days;
+    uint64 public constant MIN_CORRECTION_WINDOW = 1 hours;
+    uint64 public constant MAX_CORRECTION_WINDOW = 7 days;
     uint256 public constant MAX_ATTESTATION_ID_LENGTH = 128;
 
     /// @notice Time after the start before a game without a result may be voided (default 7 days).
     uint64 public postponeWindow;
+
+    /// @notice Time after a result during which the steward may correct it, once (default 24 h).
+    ///         A change applies to results written after it: a closed window never reopens, so a
+    ///         round Predictions already settled can never see one of its results change.
+    uint64 public correctionWindow;
 
     mapping(bytes32 gameId => Game) private _games;
 
@@ -55,6 +64,9 @@ contract ResultsRegistry is IResultsRegistry, AccessControlDefaultAdminRules, Pa
     error InvalidSource(bytes32 gameId);
     error BeforeStart(bytes32 gameId);
     error PostponeWindowOpen(bytes32 gameId, uint64 voidableAt);
+    error NoResult(bytes32 gameId);
+    error AlreadyCorrected(bytes32 gameId);
+    error CorrectionWindowClosed(bytes32 gameId, uint64 correctableUntil);
     error DelayOutOfRange(uint64 value);
 
     event GameRegistered(
@@ -76,14 +88,27 @@ contract ResultsRegistry is IResultsRegistry, AccessControlDefaultAdminRules, Pa
         bytes32 sourceHash,
         string attestationId
     );
+    event ResultCorrected(
+        bytes32 indexed gameId,
+        GameStatus status,
+        Side winner,
+        uint16 homeScore,
+        uint16 awayScore,
+        uint8 extraPeriods,
+        bytes32 sourceHash,
+        string attestationId,
+        string reason
+    );
     event GameVoided(bytes32 indexed gameId, string reason);
     event PostponeWindowSet(uint64 postponeWindow);
+    event CorrectionWindowSet(uint64 correctionWindow);
 
     /// @dev Every role holder is set here, so the deployer gets no role: any account can deploy.
     constructor(
         uint48 adminDelay,
         address admin,
         uint64 initialPostponeWindow,
+        uint64 initialCorrectionWindow,
         address operator,
         address resultsRelayer,
         address steward
@@ -93,6 +118,7 @@ contract ResultsRegistry is IResultsRegistry, AccessControlDefaultAdminRules, Pa
         _grantRole(RESULTS_RELAYER_ROLE, resultsRelayer);
         _grantRole(STEWARD_ROLE, steward);
         _setPostponeWindow(initialPostponeWindow);
+        _setCorrectionWindow(initialCorrectionWindow);
     }
 
     // ---------------------------------------------------------------------
@@ -161,7 +187,7 @@ contract ResultsRegistry is IResultsRegistry, AccessControlDefaultAdminRules, Pa
             Game storage g = _games[r.gameId];
             if (g.status != GameStatus.Scheduled) {
                 if (g.status == GameStatus.None) revert GameNotScheduled(r.gameId);
-                revert ResultAlreadyRecorded(r.gameId); // a recorded result is final
+                revert ResultAlreadyRecorded(r.gameId); // only the steward can correct it
             }
             _writeResult(g, r);
             emit ResultRecorded(
@@ -191,7 +217,35 @@ contract ResultsRegistry is IResultsRegistry, AccessControlDefaultAdminRules, Pa
         g.status = GameStatus.Void;
         g.winner = Side.None;
         g.recordedAt = uint64(block.timestamp);
+        g.correctableUntil = uint48(block.timestamp + correctionWindow);
         emit GameVoided(gameId, reason);
+    }
+
+    /// @notice Replace a game's result (or void) with the right one, once, within `correctionWindow`
+    ///         of it. Same checks as recordResults; the source may be the same attested file (a
+    ///         parser bug) or a new one. `recordedAt` moves to now, so every round of the game
+    ///         gives the corrected result a full `finalizationDelay` before settling.
+    ///         Works while paused: pausing to stop the relayer, then correcting, is a remedy.
+    function correctResult(ResultInput calldata r, string calldata reason) external onlyRole(STEWARD_ROLE) {
+        Game storage g = _games[r.gameId];
+        if (g.recordedAt == 0) revert NoResult(r.gameId);
+        if (g.corrected) revert AlreadyCorrected(r.gameId);
+        if (block.timestamp >= g.correctableUntil) revert CorrectionWindowClosed(r.gameId, g.correctableUntil);
+
+        _writeResult(g, r);
+        g.correctableUntil = 0;
+        g.corrected = true;
+        emit ResultCorrected(
+            r.gameId,
+            r.status,
+            r.winner,
+            r.homeScore,
+            r.awayScore,
+            r.extraPeriods,
+            r.sourceHash,
+            r.attestationId,
+            reason
+        );
     }
 
     // ---------------------------------------------------------------------
@@ -200,6 +254,10 @@ contract ResultsRegistry is IResultsRegistry, AccessControlDefaultAdminRules, Pa
 
     function setPostponeWindow(uint64 window) external onlyRole(DEFAULT_ADMIN_ROLE) {
         _setPostponeWindow(window);
+    }
+
+    function setCorrectionWindow(uint64 window) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        _setCorrectionWindow(window);
     }
 
     /// @notice The steward's hot wallet can stop the registry in minutes; only the admin resumes it.
@@ -219,9 +277,14 @@ contract ResultsRegistry is IResultsRegistry, AccessControlDefaultAdminRules, Pa
         return _games[gameId];
     }
 
-    /// @notice A game is final once it has a result (or was voided): results never change.
+    /// @notice A game is final once it has a result (or was voided). The steward may still correct
+    ///         it once, until `correctableUntil`.
     function isFinal(bytes32 gameId) public view returns (bool) {
         return _games[gameId].recordedAt != 0;
+    }
+
+    function correctableUntil(bytes32 gameId) external view returns (uint64) {
+        return _games[gameId].correctableUntil;
     }
 
     function outcomeOf(
@@ -254,6 +317,7 @@ contract ResultsRegistry is IResultsRegistry, AccessControlDefaultAdminRules, Pa
         g.extraPeriods = r.extraPeriods;
         g.sourceHash = r.sourceHash; // the attestation id lives in the ResultRecorded event
         g.recordedAt = uint64(block.timestamp);
+        g.correctableUntil = uint48(block.timestamp + correctionWindow);
     }
 
     /// @dev Catches parser bugs: the stored result must be consistent with the game's format.
@@ -272,6 +336,7 @@ contract ResultsRegistry is IResultsRegistry, AccessControlDefaultAdminRules, Pa
                     (target == 0 || (winnerScore == target && r.extraPeriods == 0));
             }
         } else if (r.status == GameStatus.Forfeit) {
+            // TODO: Should I handle the case where the winner is not the side ahead?
             // Forfeited before the start (no score) or during the game with the winner ahead.
             bool noScore = r.homeScore == 0 && r.awayScore == 0;
             bool winnerLeads = (r.winner == Side.Home && r.homeScore > r.awayScore) ||
@@ -296,5 +361,11 @@ contract ResultsRegistry is IResultsRegistry, AccessControlDefaultAdminRules, Pa
         if (window < MIN_POSTPONE_WINDOW || window > MAX_POSTPONE_WINDOW) revert DelayOutOfRange(window);
         postponeWindow = window;
         emit PostponeWindowSet(window);
+    }
+
+    function _setCorrectionWindow(uint64 window) private {
+        if (window < MIN_CORRECTION_WINDOW || window > MAX_CORRECTION_WINDOW) revert DelayOutOfRange(window);
+        correctionWindow = window;
+        emit CorrectionWindowSet(window);
     }
 }

@@ -4,6 +4,7 @@
     "adminDelay": 172800,
     "postponeWindow": "604800n",
     "finalizationDelay": "86400n",
+    "correctionWindow": "86400n",
     "operator": "0x<worker operator key>",
     "resultsRelayer": "0x<worker results relayer key>",
     "submitter": "0x<worker submitter key>",

@@ -6,7 +6,7 @@ lives in `injective-m2-frontend`.
 
 | Contract | Role |
 |---|---|
-| `ResultsRegistry` | Per-game fixtures and results. Results come from LocalTruth attestations (CosmWasm); `sourceHash` is the attested file's SHA-256. A recorded result is final. |
+| `ResultsRegistry` | Per-game fixtures and results. Results come from LocalTruth attestations (CosmWasm); `sourceHash` is the attested file's SHA-256. The steward can correct a result once, within `correctionWindow`. |
 | `Predictions` | Leagues, rounds (matchdays), users' signed predictions, round settlement, on-chain layer-0 scoring, final standings root (proposed, anchored once 48 h later). |
 
 ## How it works
@@ -16,11 +16,14 @@ operator:  registerGames ─▶ createLeague ─▶ scheduleRound(leagueId, matc
 user:      "Confirm" in the app ─▶ worker signs EIP-712 Submission with the user's custodial key
 submitter: submitForBatch(roundId, items)            (≤ 100 per tx, ~40k gas each; we pay the gas)
 relayer:   recordResults(...)                        (after the start and the LocalTruth attestation)
-             └─ final as soon as it is written: no correction, no challenge period
+steward:   correctResult(result, reason)             (once per game, within correctionWindow, 24 h,
+                                                      of its result; restarts the round's delay)
 anyone:    finalizeRound(roundId)                    (finalizationDelay, 24 h, after the round's last
-                                                      result: snapshots outcomes)
+                                                      result and once none can be corrected:
+                                                      snapshots outcomes)
 anyone:    scoreOf / leagueStatsOf                   (layer-0 score recomputed on-chain)
-steward:   proposeStandings(root, ...)               (Merkle root of the final standings, replaceable)
+steward:   proposeStandings(root, ...)               (Merkle root of the final standings, replaceable;
+                                                      the league takes no new round from then on)
 anyone:    checkStanding(leaf, proof)                (a row against the root and against the chain)
 steward:   finalizeLeague(leagueId)                  (48 h after the proposal, write-once)
 ```
@@ -43,19 +46,34 @@ Key rules:
   submitter has time to land the picks already confirmed for the round. The trade-off: a game moved
   to start sooner than that cannot keep its round's lock before it, so it does not count there.
 - Home/away teams are registered with the fixture; `recordResults` rejects a swapped file.
-- **Results are final when recorded.** They come from an accredited institutional source (MSC,
-  attested on LocalTruth), so there is no correction or challenge period: the first attested
-  result of a game is the one that counts. No result is accepted before the start, `Void` included.
-  The accepted risk is a relayer bug (e.g. a row matched to the wrong game) that the on-chain
-  checks do not catch. The remedy is the finalization window: a round settles only
-  `finalizationDelay` (24 h, admin-settable between 1 h and 7 days) after its last result, and
-  until then the steward can cancel it (see "Pause and incidents").
+- **Results can be corrected once, by the steward.** They come from an accredited institutional
+  source (MSC, attested on LocalTruth), so there is no challenge period: the relayer writes the
+  first attested result. No result is accepted before the start, `Void` included. The risk is a
+  relayer bug (e.g. a row matched to the wrong game, home and away sets swapped) that the on-chain
+  checks do not catch, or a wrong attestation. The remedy is `correctResult`:
+  - once per game, within `correctionWindow` (24 h, admin-settable between 1 h and 7 days) of
+    its result; the deadline is fixed when the result is written, so a later change of the window
+    never reopens it;
+  - same checks as `recordResults`; the source may be the same attested file (parser bug) or a
+    new one; `ResultCorrected` carries both the result and the steward's reason;
+  - it also turns a void (by the relayer or `voidGame`) into a result;
+  - it moves `recordedAt` to now, so every round of the game gives the corrected result a full
+    `finalizationDelay`.
+
+  A round settles only `finalizationDelay` (24 h, admin-settable between 1 h and 7 days) after its
+  last result **and** once none of its results can be corrected (`correctableUntil`), whatever the
+  two windows are set to: a settled round never misses a correction. If the correction is wrong
+  too, or the window has closed, the steward can still cancel the round before it settles (see
+  "Pause and incidents").
 - A game with no result `postponeWindow` (7 days) after its start can be voided by the steward, so a
   round is never blocked by a game that is never played nor uploaded.
 - **Final standings in two steps.** The steward proposes the root once every round is settled; a
   new proposal replaces it and restarts the 48 h review. During the review `checkStanding`
   verifies any row against the proposed root and against `leagueStatsOf`, so a wrong row is
-  provable on-chain. A round scheduled after the proposal makes it outdated.
+  provable on-chain. From the first proposal on, `scheduleRound` refuses new rounds for the league
+  (`StandingsAlreadyProposed`): the season is over, and the operator key cannot hold up
+  `finalizeLeague`. The review starts only when the steward proposes; the app's worker prepares
+  the standings once the league's `endsAt` has passed and every round is settled.
 - Tie-break (off-chain, from on-chain data): points → rounds played → average lead time before the
   lock (`sumLeadTime / roundsPlayed`) → verifiable draw.
 
@@ -84,8 +102,8 @@ head-to-head sport needs no contract change, only its format (set in the app's C
 
 | Role | Holder | Can |
 |---|---|---|
-| `DEFAULT_ADMIN_ROLE` | cold wallet (2-step transfer with delay) | roles, `unpause`, `setPostponeWindow`, `setFinalizationDelay` |
-| `STEWARD_ROLE` | a person, signing from the admin panel | `pause`, `voidGame`, `cancelRound`, `proposeStandings`, `finalizeLeague` |
+| `DEFAULT_ADMIN_ROLE` | cold wallet (2-step transfer with delay) | roles, `unpause`, `setPostponeWindow`, `setCorrectionWindow`, `setFinalizationDelay` |
+| `STEWARD_ROLE` | a person, signing from the admin panel | `pause`, `voidGame`, `correctResult`, `cancelRound`, `proposeStandings`, `finalizeLeague` |
 | `OPERATOR_ROLE` | worker key | fixtures, leagues, rounds, lock updates |
 | `RESULTS_RELAYER_ROLE` | worker key | `recordResults` |
 | `SUBMITTER_ROLE` | worker key | `submitFor`, `submitForBatch` |
@@ -96,13 +114,18 @@ deploying account gets no role.
 ### Pause and incidents
 
 The steward pauses both contracts from the admin panel in minutes; only the admin (cold wallet)
-unpauses. While paused every write stops except `cancelRound`, the admin functions (including
-`grantRole`/`revokeRole`) and the views. A pause near a lock loses that round's late submissions:
+unpauses. While paused every write stops except `correctResult`, `cancelRound`, the admin
+functions (including `grantRole`/`revokeRole`) and the views. A pause near a lock loses that round's late submissions:
 cancel it.
 
-- **Wrong result recorded:** within `finalizationDelay` of the round's last result, the steward
-  pauses (to stop more writes if the relayer is at fault) and cancels the round. The admin then
-  revokes the faulty key if needed and unpauses.
+- **Wrong result recorded:** within `correctableUntil` of the game (the worker's inbox shows it),
+  the steward calls `correctResult` with the right result. No pause is needed: the correction
+  restarts the delay of every round of the game. If the relayer is at fault, the steward also
+  pauses the registry to stop more writes (correcting works while paused); the admin revokes the
+  faulty key if needed and unpauses.
+- **Wrong result past its correction window, or a wrong correction:** before the round settles,
+  the steward pauses Predictions (so nobody calls `finalizeRound` meanwhile) and cancels the
+  round; the admin unpauses.
 - **Worker key compromised:** the steward pauses; the admin revokes the key, grants a new one and
   unpauses. Rounds settled in the meantime are not affected; open ones may need cancelling.
 

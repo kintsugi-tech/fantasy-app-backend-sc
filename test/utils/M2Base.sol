@@ -29,6 +29,7 @@ abstract contract M2Base is Test {
 
     uint64 internal constant POSTPONE = 7 days;
     uint64 internal constant FINALIZATION_DELAY = 24 hours;
+    uint64 internal constant CORRECTION_WINDOW = 12 hours; // shorter than the delay: it does not move finalizableAt
     uint64 internal constant T0 = 1_800_000_000;
 
     bytes32 internal constant LEAGUE = keccak256("mvl-2026-27-main");
@@ -40,7 +41,7 @@ abstract contract M2Base is Test {
 
     function setUp() public virtual {
         vm.warp(T0);
-        registry = new ResultsRegistry(0, admin, POSTPONE, operator, resultsRelayer, steward);
+        registry = new ResultsRegistry(0, admin, POSTPONE, CORRECTION_WINDOW, operator, resultsRelayer, steward);
         predictions = new Predictions(0, admin, registry, operator, submitter, steward, FINALIZATION_DELAY);
 
         (alice, aliceKey) = makeAddrAndKey("alice");

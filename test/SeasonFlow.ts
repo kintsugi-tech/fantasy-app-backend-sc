@@ -20,6 +20,7 @@ import * as m2 from '../scripts/lib/m2.js'
 const HOUR = 3600
 const POSTPONE = 7 * 24 * HOUR
 const FINALIZATION_DELAY = 24 * HOUR
+const CORRECTION_WINDOW = 12 * HOUR
 /** Volleyball, best of 5: the winner is the first to 3 sets. */
 const VOLLEYBALL: m2.GameFormat = { targetScore: 3, drawAllowed: false }
 
@@ -34,6 +35,7 @@ describe('M2 season flow', async () => {
       0,
       admin.account.address,
       BigInt(POSTPONE),
+      BigInt(CORRECTION_WINDOW),
       operator.account.address,
       resultsRelayer.account.address,
       steward.account.address,
@@ -192,7 +194,9 @@ describe('M2 season flow', async () => {
         attestationId: `mvl_2026_game-${i}`,
       }
     })
-    await c.registry.write.recordResults([results.slice(0, 3)], { account: resultsRelayer.account })
+    // Game 3 goes in with the sets swapped (a parser bug): 2-3 instead of 3-2.
+    const swapped = { ...results[2], winner: 2, homeScore: results[2].awayScore, awayScore: results[2].homeScore }
+    await c.registry.write.recordResults([[...results.slice(0, 2), swapped]], { account: resultsRelayer.account })
 
     // A round settles only once every game has a result, and a full delay after the last one:
     // results are final as soon as recorded, the delay leaves the steward time to cancel.
@@ -202,6 +206,22 @@ describe('M2 season flow', async () => {
       'GameNotFinal',
       [gameIds[3]],
     )
+
+    // The steward corrects it once, from the same attested file, within the correction window.
+    const correctHash = await c.registry.write.correctResult([results[2], 'sets swapped by the parser'], {
+      account: steward.account,
+    })
+    const correctReceipt = await publicClient.waitForTransactionReceipt({ hash: correctHash })
+    const [corrected] = parseEventLogs({ abi: c.registry.abi, logs: correctReceipt.logs, eventName: 'ResultCorrected' })
+    assert.equal(corrected.args.sourceHash, results[2].sourceHash)
+    assert.equal((await c.registry.read.getGame([gameIds[2]])).corrected, true)
+    await viem.assertions.revertWithCustomErrorWithArgs(
+      c.registry.write.correctResult([swapped, 'again'], { account: steward.account }),
+      c.registry,
+      'AlreadyCorrected',
+      [gameIds[2]],
+    )
+
     await c.registry.write.recordResults([results.slice(3)], { account: resultsRelayer.account })
     const readyAt = await c.predictions.read.finalizableAt([roundId])
     assert.equal(readyAt, BigInt((await networkHelpers.time.latest()) + FINALIZATION_DELAY))
@@ -249,6 +269,15 @@ describe('M2 season flow', async () => {
     await c.predictions.write.proposeStandings(
       [leagueId, tree.root as Hex, ranked.length, reportHash, 'https://m2.example/reports/mvl.json'],
       { account: steward.account },
+    )
+    // The proposal ends the season: the league takes no new round.
+    await viem.assertions.revertWithCustomErrorWithArgs(
+      c.predictions.write.scheduleRound([leagueId, 2, BigInt(now), lockTime + 100n * BigInt(HOUR), gameIds], {
+        account: operator.account,
+      }),
+      c.predictions,
+      'StandingsAlreadyProposed',
+      [leagueId],
     )
 
     // During the review anyone can check a row against the proposal and against the chain.

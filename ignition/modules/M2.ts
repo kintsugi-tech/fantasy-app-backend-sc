@@ -16,6 +16,7 @@ export default buildModule('M2', (m) => {
   const adminDelay = m.getParameter<number>('adminDelay')
   const postponeWindow = m.getParameter<bigint>('postponeWindow', 7n * 24n * 3600n)
   const finalizationDelay = m.getParameter<bigint>('finalizationDelay', 24n * 3600n)
+  const correctionWindow = m.getParameter<bigint>('correctionWindow', 24n * 3600n)
 
   const operator = m.getParameter<string>('operator')
   const resultsRelayer = m.getParameter<string>('resultsRelayer')
@@ -26,6 +27,7 @@ export default buildModule('M2', (m) => {
     adminDelay,
     admin,
     postponeWindow,
+    correctionWindow,
     operator,
     resultsRelayer,
     steward,

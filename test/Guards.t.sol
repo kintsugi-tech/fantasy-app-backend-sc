@@ -14,14 +14,19 @@ import {M2Base} from "./utils/M2Base.sol";
 contract GuardsTest is M2Base {
     function test_ConstructorGuards() public {
         vm.expectRevert(abi.encodeWithSelector(ResultsRegistry.DelayOutOfRange.selector, uint64(1 hours)));
-        new ResultsRegistry(0, admin, 1 hours, operator, resultsRelayer, steward);
+        new ResultsRegistry(0, admin, 1 hours, CORRECTION_WINDOW, operator, resultsRelayer, steward);
+        vm.expectRevert(abi.encodeWithSelector(ResultsRegistry.DelayOutOfRange.selector, uint64(59 minutes)));
+        new ResultsRegistry(0, admin, POSTPONE, 59 minutes, operator, resultsRelayer, steward);
+        vm.expectRevert(abi.encodeWithSelector(ResultsRegistry.DelayOutOfRange.selector, uint64(7 days + 1)));
+        new ResultsRegistry(0, admin, POSTPONE, 7 days + 1, operator, resultsRelayer, steward);
 
+        uint64 window = CORRECTION_WINDOW;
         vm.expectRevert(ResultsRegistry.ZeroAddress.selector);
-        new ResultsRegistry(0, admin, POSTPONE, address(0), resultsRelayer, steward);
+        new ResultsRegistry(0, admin, POSTPONE, window, address(0), resultsRelayer, steward);
         vm.expectRevert(ResultsRegistry.ZeroAddress.selector);
-        new ResultsRegistry(0, admin, POSTPONE, operator, address(0), steward);
+        new ResultsRegistry(0, admin, POSTPONE, window, operator, address(0), steward);
         vm.expectRevert(ResultsRegistry.ZeroAddress.selector);
-        new ResultsRegistry(0, admin, POSTPONE, operator, resultsRelayer, address(0));
+        new ResultsRegistry(0, admin, POSTPONE, window, operator, resultsRelayer, address(0));
 
         uint64 delay = FINALIZATION_DELAY;
         vm.expectRevert(Predictions.ZeroAddress.selector);
