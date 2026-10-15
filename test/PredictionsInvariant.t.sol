@@ -108,7 +108,8 @@ contract PredictionsHandler is Test {
     }
 
     /// The operator moves a game without a result anywhere from 1 day ago to 2 days ahead. Moves
-    /// to the past must be rejected (C1); a rejected call rolls back `lockedIn` too.
+    /// to the past, and any move of a game that has started, must be rejected (C1); a rejected
+    /// call rolls back `lockedIn` too.
     function rescheduleGame(uint256 roundSeed, uint256 gameSeed, uint32 offset) external {
         bytes32 roundId = _round(roundSeed);
         bytes32 gameId = _games[roundId][gameSeed % GAMES];

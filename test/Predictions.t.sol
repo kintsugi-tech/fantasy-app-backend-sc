@@ -592,22 +592,146 @@ contract PredictionsTest is M2Base {
         _assertScore(alice, 1, 1);
     }
 
-    /// C1: once picks are locked no move can drop a game from the score, because a new start time
-    /// must be in the future and therefore after the lock.
+    /// C1: once picks are locked no move can drop a game from the score: a game that has started
+    /// keeps its start time, and one that has not can only move to the future, after the lock.
     function test_GameCannotBeDroppedAfterLock() public {
         _submit(aliceKey, alice, roundId, _picks(H, A, H));
         vm.warp(lockTime + 1);
         vm.prank(operator);
-        vm.expectRevert(abi.encodeWithSelector(ResultsRegistry.StartTimeInPast.selector, games[0], lockTime - 1));
+        vm.expectRevert(abi.encodeWithSelector(ResultsRegistry.GameAlreadyStarted.selector, games[0], lockTime));
         registry.rescheduleGame(games[0], lockTime - 1);
 
-        // Postponing to a later date still works, and the game keeps counting.
+        // Postponed after its start: the date stays, the replay is recorded on the same id and counts.
         vm.prank(operator);
+        vm.expectRevert(abi.encodeWithSelector(ResultsRegistry.GameAlreadyStarted.selector, games[0], lockTime));
         registry.rescheduleGame(games[0], lockTime + 1 days);
         vm.warp(lockTime + 1 days + 3 hours);
         _settleGames(games, _bools(true, false, true));
         _finalizeRound(roundId);
         _assertScore(alice, 3, 3);
+    }
+
+    // --- postponements ---------------------------------------------------------
+
+    /// A game brought forward and played before the lock never counts again, even if it is moved
+    /// back after the lock: picks confirmed once it was played would otherwise score on it.
+    function test_GamePlayedBeforeLockCannotCountAgain() public {
+        _submit(bobKey, bob, roundId, _picks(A, H, H));
+        vm.prank(operator);
+        registry.rescheduleGame(games[0], T0 + 2 hours);
+
+        vm.warp(T0 + 5 hours); // game 0 played, home won: alice confirms knowing it
+        _submit(aliceKey, alice, roundId, _picks(H, H, H));
+
+        vm.warp(lockTime + 1 minutes);
+        vm.prank(operator);
+        vm.expectRevert(abi.encodeWithSelector(ResultsRegistry.GameAlreadyStarted.selector, games[0], T0 + 2 hours));
+        registry.rescheduleGame(games[0], lockTime + 2 hours);
+
+        vm.warp(lockTime + 3 hours);
+        _settleGames(games, _bools(true, true, true));
+        _finalizeRound(roundId);
+        _assertScore(alice, 2, 2);
+        _assertScore(bob, 2, 2);
+    }
+
+    /// Postponed 5 minutes before the start (date moved) or 5 minutes after it (date left as is):
+    /// same score. Only the moved game keeps the registry's guard against an early result.
+    function test_PostponementScoresTheSameMovedOrNot() public {
+        bytes32[] memory late = _registerGames(3, lockTime);
+        bytes32 lateRound = _scheduleRound(2, late, opensAt, lockTime);
+        _submit(aliceKey, alice, roundId, _picks(H, H, H));
+        _submit(aliceKey, alice, lateRound, _picks(H, H, H));
+
+        vm.warp(lockTime - 5 minutes);
+        vm.prank(operator);
+        registry.rescheduleGame(games[0], lockTime + 3 days);
+
+        vm.warp(lockTime + 5 minutes);
+        vm.prank(operator);
+        vm.expectRevert(abi.encodeWithSelector(ResultsRegistry.GameAlreadyStarted.selector, late[0], lockTime));
+        registry.rescheduleGame(late[0], lockTime + 3 days);
+
+        vm.warp(lockTime + 3 hours);
+        _record(_final(games[1], true));
+        _record(_final(games[2], true));
+        _record(_final(late[1], true));
+        _record(_final(late[2], true));
+
+        IResultsRegistry.ResultInput[] memory early = new IResultsRegistry.ResultInput[](1);
+        early[0] = _final(games[0], false);
+        vm.prank(resultsRelayer);
+        vm.expectRevert(abi.encodeWithSelector(ResultsRegistry.BeforeStart.selector, games[0]));
+        registry.recordResults(early);
+
+        vm.warp(lockTime + 3 days + 3 hours);
+        _record(_final(games[0], true));
+        _record(_final(late[0], true));
+        _finalizeRound(roundId);
+        _finalizeRound(lateRound);
+        assertEq(predictions.getRound(roundId).outcomes, predictions.getRound(lateRound).outcomes);
+        _assertScore(alice, 3, 3);
+        (uint8 correct, uint8 counted) = predictions.scoreOf(lateRound, alice);
+        assertEq(correct, 3);
+        assertEq(counted, 3);
+    }
+
+    /// The round waits for a postponed game. The steward may void it from its original start plus
+    /// postponeWindow, a minimum, not a deadline: until it is voided, a late replay still counts.
+    function test_PostponeWindowIsAMinimumNotADeadline() public {
+        _submit(aliceKey, alice, roundId, _picks(H, H, H));
+        vm.warp(lockTime + 3 hours);
+        _record(_final(games[1], true));
+        _record(_final(games[2], true));
+        assertEq(predictions.finalizableAt(roundId), 0);
+
+        vm.warp(lockTime + POSTPONE);
+        vm.prank(steward);
+        vm.expectRevert(
+            abi.encodeWithSelector(ResultsRegistry.PostponeWindowOpen.selector, games[0], lockTime + POSTPONE)
+        );
+        registry.voidGame(games[0], "not replayed");
+
+        vm.warp(lockTime + 10 days);
+        _record(_final(games[0], true));
+        _finalizeRound(roundId);
+        _assertScore(alice, 3, 3);
+    }
+
+    /// A game whose start has passed cannot join a later round: a replay played there needs a new
+    /// gameId.
+    function test_StartedGameCannotJoinAnotherRound() public {
+        vm.warp(lockTime + 5 minutes);
+        bytes32[] memory next = new bytes32[](1);
+        next[0] = games[0];
+        _expectSchedule(
+            2,
+            next,
+            lockTime + 1 hours,
+            lockTime + 2 days,
+            abi.encodeWithSelector(Predictions.LockAfterStart.selector, games[0])
+        );
+    }
+
+    /// Corner case: a game brought forward, whose anticipation is undone only after the anticipated
+    /// time, stays out of its round, and the round's lock can no longer move before it.
+    function test_AnticipationUndoneTooLateStaysExcluded() public {
+        vm.prank(operator);
+        registry.rescheduleGame(games[0], T0 + 2 hours);
+
+        vm.warp(T0 + 3 hours);
+        vm.prank(operator);
+        vm.expectRevert(abi.encodeWithSelector(ResultsRegistry.GameAlreadyStarted.selector, games[0], T0 + 2 hours));
+        registry.rescheduleGame(games[0], lockTime);
+
+        vm.prank(operator);
+        vm.expectRevert(abi.encodeWithSelector(Predictions.LockAfterStart.selector, games[0]));
+        predictions.updateRoundLock(roundId, lockTime - 1 hours);
+
+        vm.warp(lockTime + 3 hours);
+        _settleGames(games, _bools(true, true, true));
+        _finalizeRound(roundId);
+        assertEq(predictions.getRound(roundId).outcomes & 3, 0, "game 0 does not count");
     }
 
     /// MAX_GAMES: a full 32-game round, the limit of the 2-bit packing in a uint64.

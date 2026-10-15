@@ -40,8 +40,17 @@ Key rules:
 - `picksHash = keccak256(abi.encode(roundId, gamesHash, keccak256(picks)))` is recomputed by the
   contract; it is the receipt the app shows.
 - A game counts in a round only if it was `Final`/`Forfeit` and did not start before the lock.
-  `rescheduleGame` only accepts a future start time, so once a round is locked no move can drop one
-  of its games from the score.
+  `rescheduleGame` only moves a game that has not started yet, to a future time: once its start
+  time has passed it never moves again (`GameAlreadyStarted`), and from that same instant it takes
+  a result. So at the lock the games that can count in a round are fixed: one that started before
+  the lock never comes back (picks confirmed after it was played would score on it), one that
+  starts after can only move later. Only a void removes a game afterwards.
+- **Postponements.** Known before the start: `rescheduleGame` to the new date. Known after it: the
+  start time stays; the replay's result is recorded on the same game id and counts in the round,
+  with the same score as if the date had moved. Until then nothing on-chain refuses an early
+  result for that game, so the worker must not record a `void` for a game that is only postponed:
+  past `correctableUntil` the replay could no longer be recorded. A replay that should count in a
+  later round needs a new game id (a started game cannot be scheduled again).
 - `updateRoundLock` only moves a lock to at least `MIN_LOCK_NOTICE` (15 min) from now, so the
   submitter has time to land the picks already confirmed for the round. The trade-off: a game moved
   to start sooner than that cannot keep its round's lock before it, so it does not count there.
@@ -66,7 +75,9 @@ Key rules:
   too, or the window has closed, the steward can still cancel the round before it settles (see
   "Pause and incidents").
 - A game with no result `postponeWindow` (7 days) after its start can be voided by the steward, so a
-  round is never blocked by a game that is never played nor uploaded.
+  round is never blocked by a game that is never played nor uploaded. As a started game never
+  moves, that date is fixed once the start has passed. It is a minimum, not a deadline: until the
+  steward voids it, a late replay is still recorded and counts.
 - **Final standings in two steps.** The steward proposes the root once every round is settled; a
   new proposal replaces it and restarts the 48 h review. During the review `checkStanding`
   verifies any row against the proposed root and against `leagueStatsOf`, so a wrong row is

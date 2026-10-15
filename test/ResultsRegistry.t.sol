@@ -141,6 +141,38 @@ contract ResultsRegistryTest is M2Base {
         registry.rescheduleGame(game, startTime + 5 hours);
     }
 
+    /// The start is the boundary: until then the game moves and takes no result; from then on its
+    /// start time is fixed and it takes a result (or a void).
+    function test_RescheduleOnlyBeforeTheStart() public {
+        vm.warp(startTime - 1);
+        vm.prank(operator);
+        registry.rescheduleGame(game, startTime + 1 days);
+
+        vm.warp(startTime + 1 days);
+        vm.prank(operator);
+        vm.expectRevert(abi.encodeWithSelector(ResultsRegistry.GameAlreadyStarted.selector, game, startTime + 1 days));
+        registry.rescheduleGame(game, startTime + 2 days);
+        _record(_final(game, true)); // a result is accepted from the same instant
+    }
+
+    /// A game postponed after its start keeps its start time, so the registry accepts a void at
+    /// once; past the correction window the replay can no longer be recorded. The worker must not
+    /// record a void for a game that is only postponed.
+    function test_EarlyVoidOfAPostponedGameIsFinal() public {
+        vm.warp(startTime + 2 hours);
+        _record(_result(game, IResultsRegistry.GameStatus.Void, IResultsRegistry.Side.None, 0, 0));
+        uint64 until = registry.correctableUntil(game);
+
+        vm.warp(startTime + 3 days);
+        IResultsRegistry.ResultInput memory replay = _final(game, true);
+        vm.prank(steward);
+        vm.expectRevert(abi.encodeWithSelector(ResultsRegistry.CorrectionWindowClosed.selector, game, until));
+        registry.correctResult(replay, "replay");
+
+        vm.expectRevert(abi.encodeWithSelector(ResultsRegistry.ResultAlreadyRecorded.selector, game));
+        this.recordAsRelayer(replay);
+    }
+
     // --- recordResults ---------------------------------------------------------
 
     function test_RecordFinalResult() public {

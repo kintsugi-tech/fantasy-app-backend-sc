@@ -14,6 +14,7 @@ import {IResultsRegistry} from "./interfaces/IResultsRegistry.sol";
 ///
 ///         Lifecycle of a game:
 ///           registerGames (operator)  ->  Scheduled
+///           rescheduleGame (operator) ->  Scheduled, new start time (only before the start)
 ///           recordResults (relayer)   ->  Final | Forfeit | Void (never before the start time)
 ///           voidGame (steward)        ->  Void (only when no result arrived within
 ///                                         `postponeWindow` after the start time)
@@ -56,6 +57,7 @@ contract ResultsRegistry is IResultsRegistry, AccessControlDefaultAdminRules, Pa
     error BatchTooLarge(uint256 size, uint256 max);
     error InvalidGameInfo(bytes32 gameId);
     error StartTimeInPast(bytes32 gameId, uint64 startTime);
+    error GameAlreadyStarted(bytes32 gameId, uint64 startTime);
     error GameAlreadyRegistered(bytes32 gameId);
     error GameNotScheduled(bytes32 gameId);
     error ResultAlreadyRecorded(bytes32 gameId);
@@ -159,13 +161,17 @@ contract ResultsRegistry is IResultsRegistry, AccessControlDefaultAdminRules, Pa
         }
     }
 
-    /// @notice Move a game that has no result yet to a future time. Rounds whose lock is past a
-    ///         game's new start time will not count that game (see Predictions.finalizeRound). As
-    ///         the new start time must be in the future, that can happen only before the round
-    ///         locks: once picks are locked, no move can drop a game from the score.
+    /// @notice Move a game that has not started yet to a future time. Rounds whose lock is past a
+    ///         game's new start time will not count that game (see Predictions.finalizeRound).
+    ///         A start time that has passed never moves again: from then on the game only takes a
+    ///         result or a void. So at a round's lock the games that can count are fixed: one that
+    ///         started before the lock never comes back, one that starts after can only move later.
+    ///         A game postponed after its start keeps its start time: the replay's result is
+    ///         recorded on the same id, or the steward voids it once `postponeWindow` has passed.
     function rescheduleGame(bytes32 gameId, uint64 newStartTime) external onlyRole(OPERATOR_ROLE) whenNotPaused {
         Game storage g = _games[gameId];
         if (g.status != GameStatus.Scheduled) revert GameNotScheduled(gameId);
+        if (block.timestamp >= g.startTime) revert GameAlreadyStarted(gameId, g.startTime);
         if (newStartTime <= block.timestamp) revert StartTimeInPast(gameId, newStartTime);
         uint64 old = g.startTime;
         g.startTime = newStartTime;
