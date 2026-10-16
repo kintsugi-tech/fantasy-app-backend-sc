@@ -198,12 +198,12 @@ describe('M2 season flow', async () => {
     const swapped = { ...results[2], winner: 2, homeScore: results[2].awayScore, awayScore: results[2].homeScore }
     await c.registry.write.recordResults([[...results.slice(0, 2), swapped]], { account: resultsRelayer.account })
 
-    // A round settles only once every game has a result, and a full delay after the last one:
-    // results are final as soon as recorded, the delay leaves the steward time to cancel.
+    // A round settles only once every game has a result, a full delay after the last one and once
+    // none can be corrected: in that time the steward corrects a wrong result, or cancels the round.
     await viem.assertions.revertWithCustomErrorWithArgs(
       c.predictions.write.finalizeRound([roundId], { account: anyone.account }),
       c.predictions,
-      'GameNotFinal',
+      'NoResult',
       [gameIds[3]],
     )
 

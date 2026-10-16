@@ -24,7 +24,8 @@ import {PicksLib} from "./libraries/PicksLib.sol";
 ///           steward corrects a wrong result, or cancels the round as a last resort.
 ///         - Final standings, a Merkle root, are proposed by the steward after the last round
 ///           (`proposeStandings`, replaceable) and anchored once 48 h later (`finalizeLeague`).
-///           Once proposed, the league takes no new round.
+///           Once proposed, the league takes no new round, unless the admin withdraws the
+///           proposal (`withdrawStandings`, for one made too early).
 ///           Anyone can check a row against them and against the chain (`checkStanding`).
 ///         - Pause: the steward stops everything but `cancelRound` in minutes; only the admin
 ///           (cold wallet) resumes.
@@ -115,7 +116,7 @@ contract Predictions is IPredictions, AccessControlDefaultAdminRules, Pausable, 
     error RoundNotOpen(bytes32 roundId);
     error RoundLocked(bytes32 roundId);
     error RoundNotLocked(bytes32 roundId);
-    error GameNotFinal(bytes32 gameId);
+    error NoResult(bytes32 gameId);
     error FinalizationPending(bytes32 roundId, uint64 finalizableAt);
     error DelayOutOfRange(uint64 value);
     error RoundsPending(bytes32 leagueId);
@@ -158,6 +159,7 @@ contract Predictions is IPredictions, AccessControlDefaultAdminRules, Pausable, 
         string reportURI,
         uint64 finalizableAt
     );
+    event StandingsWithdrawn(bytes32 indexed leagueId);
     event LeagueFinalized(bytes32 indexed leagueId, bytes32 standingsRoot, uint32 totalPlayers, bytes32 reportHash);
 
     /// @dev Every role holder is set here, so the deployer gets no role: any account can deploy.
@@ -322,7 +324,7 @@ contract Predictions is IPredictions, AccessControlDefaultAdminRules, Pausable, 
         if (block.timestamp < r.lockTime) revert RoundNotLocked(roundId);
 
         (uint64 outcomes, uint64 readyAt, bytes32 pending) = _outcomes(roundId, r.lockTime);
-        if (pending != bytes32(0)) revert GameNotFinal(pending);
+        if (pending != bytes32(0)) revert NoResult(pending);
         if (block.timestamp < readyAt) revert FinalizationPending(roundId, readyAt);
 
         r.outcomes = outcomes;
@@ -346,7 +348,8 @@ contract Predictions is IPredictions, AccessControlDefaultAdminRules, Pausable, 
     /// @notice Propose the final standings once every round is finalized or cancelled. They are
     ///         public for STANDINGS_REVIEW_PERIOD before finalizeLeague can anchor them; a new
     ///         proposal replaces the previous one and restarts the period. From the first proposal
-    ///         on, the league takes no new round: the season is over.
+    ///         on, the league takes no new round: the season is over (only the admin can reopen it,
+    ///         see withdrawStandings).
     /// @param standingsRoot OZ StandardMerkleTree root of StandingLeaf rows
     ///        (bytes32 leagueId, address account, uint32 rank, uint32 points, uint32 correct,
     ///         uint32 counted, uint16 roundsPlayed, uint64 sumLeadTime)
@@ -405,6 +408,17 @@ contract Predictions is IPredictions, AccessControlDefaultAdminRules, Pausable, 
     // ---------------------------------------------------------------------
     // Admin
     // ---------------------------------------------------------------------
+
+    /// @notice Withdraw standings proposed too early (e.g. mid-season): the league takes rounds again
+    ///         and the steward proposes once it is over. Admin only, so the operator key still cannot
+    ///         hold up finalizeLeague. Works while paused, like every admin function.
+    function withdrawStandings(bytes32 leagueId) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        League storage l = _leagues[leagueId];
+        if (!l.exists || l.finalized) revert LeagueNotActive(leagueId);
+        if (_proposals[leagueId].proposedAt == 0) revert NoStandingsProposal(leagueId);
+        delete _proposals[leagueId];
+        emit StandingsWithdrawn(leagueId);
+    }
 
     function setFinalizationDelay(uint64 delay) external onlyRole(DEFAULT_ADMIN_ROLE) {
         _setFinalizationDelay(delay);

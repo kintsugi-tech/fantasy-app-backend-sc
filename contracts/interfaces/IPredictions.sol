@@ -43,7 +43,7 @@ interface IPredictions {
         bytes32 reportHash;
         uint32 totalPlayers;
         uint64 proposedAt; // 0 = no proposal
-        uint16 roundCount; // rounds the standings cover; a round added later makes them outdated
+        uint16 roundCount; // rounds the standings cover (no round can be added while proposed)
     }
 
     function getLeague(bytes32 leagueId) external view returns (League memory);

@@ -29,7 +29,7 @@ contract ResultsRegistryTest is M2Base {
         assertEq(g.targetScore, VOLLEYBALL_SETS);
         assertFalse(g.drawAllowed);
         assertEq(g.recordedAt, 0);
-        assertFalse(registry.isFinal(game));
+        assertFalse(registry.hasResult(game));
     }
 
     /// Each game keeps its own format: volleyball, or an open score with draws for a sport that has them.
@@ -82,6 +82,20 @@ contract ResultsRegistryTest is M2Base {
         vm.prank(operator);
         vm.expectRevert(abi.encodeWithSelector(ResultsRegistry.InvalidGameInfo.selector, id));
         registry.registerGames(infos);
+    }
+
+    /// As for rescheduleGame, the start time must be in the future: a game registered after its
+    /// start could never move nor join a round.
+    function test_RegisterRejectsPastStartTime() public {
+        IResultsRegistry.GameInfo[] memory infos = new IResultsRegistry.GameInfo[](1);
+        bytes32 id = _gameId(998);
+        uint64[2] memory past = [uint64(block.timestamp), uint64(block.timestamp) - 1];
+        for (uint256 i = 0; i < past.length; ++i) {
+            infos[0] = IResultsRegistry.GameInfo(id, _homeTeam(1), _awayTeam(1), past[i], VOLLEYBALL_SETS, false);
+            vm.prank(operator);
+            vm.expectRevert(abi.encodeWithSelector(ResultsRegistry.StartTimeInPast.selector, id, past[i]));
+            registry.registerGames(infos);
+        }
     }
 
     function test_RegisterBatchBounds() public {
@@ -196,7 +210,7 @@ contract ResultsRegistryTest is M2Base {
         assertEq(uint8(g.winner), uint8(IResultsRegistry.Side.Away));
         assertEq(g.sourceHash, r.sourceHash);
         assertEq(g.recordedAt, block.timestamp);
-        assertTrue(registry.isFinal(game)); // final as soon as it is written
+        assertTrue(registry.hasResult(game));
     }
 
     /// Extra periods exist only in open-score formats (never in volleyball, see below).
@@ -322,7 +336,7 @@ contract ResultsRegistryTest is M2Base {
         _expectInvalid(r);
 
         _record(_result(game, IResultsRegistry.GameStatus.Final, IResultsRegistry.Side.Home, 3, 1));
-        assertTrue(registry.isFinal(game));
+        assertTrue(registry.hasResult(game));
     }
 
     /// Formats a sport other than volleyball may need, with no contract change: an open score (the
@@ -463,7 +477,7 @@ contract ResultsRegistryTest is M2Base {
         vm.stopPrank();
         assertFalse(registry.hasRole(registry.RESULTS_RELAYER_ROLE(), resultsRelayer));
         assertEq(registry.getGame(game).startTime, startTime);
-        assertFalse(registry.isFinal(game));
+        assertFalse(registry.hasResult(game));
     }
 
     // --- voidGame --------------------------------------------------------------
@@ -480,7 +494,7 @@ contract ResultsRegistryTest is M2Base {
         registry.voidGame(game, "postponed indefinitely");
         IResultsRegistry.Game memory g = registry.getGame(game);
         assertEq(uint8(g.status), uint8(IResultsRegistry.GameStatus.Void));
-        assertTrue(registry.isFinal(game));
+        assertTrue(registry.hasResult(game));
     }
 
     function test_VoidOnlySteward() public {
@@ -537,7 +551,7 @@ contract ResultsRegistryTest is M2Base {
         assertEq(g.recordedAt, startTime + 3 hours);
         assertTrue(g.corrected);
         assertEq(g.correctableUntil, 0);
-        assertTrue(registry.isFinal(game));
+        assertTrue(registry.hasResult(game));
         assertEq(registry.correctableUntil(game), 0); // can never change again
     }
 

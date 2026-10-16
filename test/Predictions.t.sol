@@ -550,7 +550,7 @@ contract PredictionsTest is M2Base {
         vm.prank(resultsRelayer);
         registry.recordResults(batch);
 
-        vm.expectRevert(abi.encodeWithSelector(Predictions.GameNotFinal.selector, games[2]));
+        vm.expectRevert(abi.encodeWithSelector(Predictions.NoResult.selector, games[2]));
         predictions.finalizeRound(roundId);
 
         // Results are final right away; the round settles a full delay after the last one.
@@ -976,6 +976,65 @@ contract PredictionsTest is M2Base {
         vm.prank(steward);
         predictions.finalizeLeague(LEAGUE);
         assertEq(predictions.getLeague(LEAGUE).standingsRoot, keccak256("root2"));
+    }
+
+    /// Standings proposed too early (e.g. a wrong end date): only the admin can withdraw them. The
+    /// league then takes rounds again, and the steward proposes once the season is over.
+    function test_AdminWithdrawsEarlyStandings() public {
+        vm.warp(lockTime + 3 hours);
+        _settleGames(games, _bools(true, true, true));
+        _finalizeRound(roundId);
+        vm.prank(admin);
+        vm.expectRevert(abi.encodeWithSelector(Predictions.NoStandingsProposal.selector, LEAGUE));
+        predictions.withdrawStandings(LEAGUE);
+        vm.prank(steward);
+        predictions.proposeStandings(LEAGUE, keccak256("early"), 10, bytes32(0), "");
+
+        bytes32 role = predictions.DEFAULT_ADMIN_ROLE();
+        address[2] memory others = [steward, operator];
+        for (uint256 i = 0; i < others.length; ++i) {
+            vm.prank(others[i]);
+            vm.expectRevert(
+                abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, others[i], role)
+            );
+            predictions.withdrawStandings(LEAGUE);
+        }
+
+        vm.prank(steward);
+        predictions.pause(); // an admin function: works while paused
+        vm.expectEmit(address(predictions));
+        emit Predictions.StandingsWithdrawn(LEAGUE);
+        vm.prank(admin);
+        predictions.withdrawStandings(LEAGUE);
+        vm.prank(admin);
+        predictions.unpause();
+        assertEq(predictions.getStandingsProposal(LEAGUE).proposedAt, 0);
+        IPredictions.StandingLeaf memory leaf = IPredictions.StandingLeaf(LEAGUE, alice, 1, 0, 0, 0, 0, 0);
+        (bool inTree, ) = predictions.checkStanding(LEAGUE, leaf, new bytes32[](0));
+        assertFalse(inTree, "no root to check against");
+
+        vm.prank(steward);
+        vm.expectRevert(abi.encodeWithSelector(Predictions.NoStandingsProposal.selector, LEAGUE));
+        predictions.finalizeLeague(LEAGUE);
+
+        // The season goes on, then the standings are proposed again and anchored.
+        uint64 lock2 = uint64(block.timestamp) + 1 hours;
+        bytes32[] memory more = _registerGames(1, lock2);
+        bytes32 round2 = _scheduleRound(2, more, uint64(block.timestamp), lock2);
+        vm.warp(lock2 + 3 hours);
+        _record(_final(more[0], true));
+        _finalizeRound(round2);
+        vm.prank(steward);
+        predictions.proposeStandings(LEAGUE, keccak256("final"), 10, bytes32(0), "");
+        vm.warp(block.timestamp + 48 hours);
+        vm.prank(steward);
+        predictions.finalizeLeague(LEAGUE);
+        assertEq(predictions.getLeague(LEAGUE).standingsRoot, keccak256("final"));
+        assertEq(predictions.getLeague(LEAGUE).roundCount, 2);
+
+        vm.prank(admin);
+        vm.expectRevert(abi.encodeWithSelector(Predictions.LeagueNotActive.selector, LEAGUE));
+        predictions.withdrawStandings(LEAGUE);
     }
 
     function test_ProposeStandingsNeedsAFinalizedRound() public {

@@ -13,7 +13,7 @@ import {IResultsRegistry} from "./interfaces/IResultsRegistry.sol";
 ///         another head-to-head sport needs no change here.
 ///
 ///         Lifecycle of a game:
-///           registerGames (operator)  ->  Scheduled
+///           registerGames (operator)  ->  Scheduled (only with a future start time)
 ///           rescheduleGame (operator) ->  Scheduled, new start time (only before the start)
 ///           recordResults (relayer)   ->  Final | Forfeit | Void (never before the start time)
 ///           voidGame (steward)        ->  Void (only when no result arrived within
@@ -127,7 +127,8 @@ contract ResultsRegistry is IResultsRegistry, AccessControlDefaultAdminRules, Pa
     // Operator: fixtures
     // ---------------------------------------------------------------------
 
-    /// @notice Register fixtures. Write-once per game.
+    /// @notice Register fixtures. Write-once per game. The start time must be in the future, as for
+    ///         rescheduleGame: a game registered after its start could never move nor join a round.
     function registerGames(GameInfo[] calldata games) external onlyRole(OPERATOR_ROLE) whenNotPaused {
         _checkBatch(games.length);
         for (uint256 i = 0; i < games.length; ++i) {
@@ -140,7 +141,7 @@ contract ResultsRegistry is IResultsRegistry, AccessControlDefaultAdminRules, Pa
                 info.startTime == 0 ||
                 (info.targetScore != 0 && info.drawAllowed) // a race to N sets has no draws
             ) revert InvalidGameInfo(info.gameId);
-            /// @dev check if the game is already registered
+            if (info.startTime <= block.timestamp) revert StartTimeInPast(info.gameId, info.startTime);
             Game storage g = _games[info.gameId];
             if (g.status != GameStatus.None) revert GameAlreadyRegistered(info.gameId);
 
@@ -223,7 +224,7 @@ contract ResultsRegistry is IResultsRegistry, AccessControlDefaultAdminRules, Pa
         g.status = GameStatus.Void;
         g.winner = Side.None;
         g.recordedAt = uint64(block.timestamp);
-        g.correctableUntil = uint48(block.timestamp + correctionWindow);
+        g.correctableUntil = uint64(block.timestamp) + correctionWindow;
         emit GameVoided(gameId, reason);
     }
 
@@ -283,9 +284,9 @@ contract ResultsRegistry is IResultsRegistry, AccessControlDefaultAdminRules, Pa
         return _games[gameId];
     }
 
-    /// @notice A game is final once it has a result (or was voided). The steward may still correct
-    ///         it once, until `correctableUntil`.
-    function isFinal(bytes32 gameId) public view returns (bool) {
+    /// @notice Whether the game has a result (or was voided). The steward may still correct it once,
+    ///         until `correctableUntil`.
+    function hasResult(bytes32 gameId) external view returns (bool) {
         return _games[gameId].recordedAt != 0;
     }
 
@@ -323,7 +324,7 @@ contract ResultsRegistry is IResultsRegistry, AccessControlDefaultAdminRules, Pa
         g.extraPeriods = r.extraPeriods;
         g.sourceHash = r.sourceHash; // the attestation id lives in the ResultRecorded event
         g.recordedAt = uint64(block.timestamp);
-        g.correctableUntil = uint48(block.timestamp + correctionWindow);
+        g.correctableUntil = uint64(block.timestamp) + correctionWindow;
     }
 
     /// @dev Catches parser bugs: the stored result must be consistent with the game's format.
@@ -342,7 +343,6 @@ contract ResultsRegistry is IResultsRegistry, AccessControlDefaultAdminRules, Pa
                     (target == 0 || (winnerScore == target && r.extraPeriods == 0));
             }
         } else if (r.status == GameStatus.Forfeit) {
-            // TODO: Should I handle the case where the winner is not the side ahead?
             // Forfeited before the start (no score) or during the game with the winner ahead.
             bool noScore = r.homeScore == 0 && r.awayScore == 0;
             bool winnerLeads = (r.winner == Side.Home && r.homeScore > r.awayScore) ||

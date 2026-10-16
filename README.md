@@ -40,7 +40,7 @@ Key rules:
 - `picksHash = keccak256(abi.encode(roundId, gamesHash, keccak256(picks)))` is recomputed by the
   contract; it is the receipt the app shows.
 - A game counts in a round only if it was `Final`/`Forfeit` and did not start before the lock.
-  `rescheduleGame` only moves a game that has not started yet, to a future time: once its start
+  `registerGames` takes only future start times (`StartTimeInPast`), and `rescheduleGame` only moves a game that has not started yet, to a future time: once its start
   time has passed it never moves again (`GameAlreadyStarted`), and from that same instant it takes
   a result. So at the lock the games that can count in a round are fixed: one that started before
   the lock never comes back (picks confirmed after it was played would score on it), one that
@@ -84,7 +84,9 @@ Key rules:
   provable on-chain. From the first proposal on, `scheduleRound` refuses new rounds for the league
   (`StandingsAlreadyProposed`): the season is over, and the operator key cannot hold up
   `finalizeLeague`. The review starts only when the steward proposes; the app's worker prepares
-  the standings once the league's `endsAt` has passed and every round is settled.
+  the standings once the league's `endsAt` has passed and every round is settled. A proposal made
+  too early (e.g. a wrong end date) would end the season: only the admin can undo it,
+  `withdrawStandings(leagueId)`, and the league then takes rounds again.
 - Tie-break (off-chain, from on-chain data): points → rounds played → average lead time before the
   lock (`sumLeadTime / roundsPlayed`) → verifiable draw.
 
@@ -113,8 +115,8 @@ head-to-head sport needs no contract change, only its format (set in the app's C
 
 | Role | Holder | Can |
 |---|---|---|
-| `DEFAULT_ADMIN_ROLE` | cold wallet (2-step transfer with delay) | roles, `unpause`, `setPostponeWindow`, `setCorrectionWindow`, `setFinalizationDelay` |
-| `STEWARD_ROLE` | a person, signing from the admin panel | `pause`, `voidGame`, `correctResult`, `cancelRound`, `proposeStandings`, `finalizeLeague` |
+| `DEFAULT_ADMIN_ROLE` | cold wallet (2-step transfer with delay) | roles, `unpause`, `setPostponeWindow`, `setCorrectionWindow`, `setFinalizationDelay`, `withdrawStandings` |
+| `STEWARD_ROLE` | a person, signing from their own wallet (the app's inbox prepares the calls) | `pause`, `voidGame`, `correctResult`, `cancelRound`, `proposeStandings`, `finalizeLeague` |
 | `OPERATOR_ROLE` | worker key | fixtures, leagues, rounds, lock updates |
 | `RESULTS_RELAYER_ROLE` | worker key | `recordResults` |
 | `SUBMITTER_ROLE` | worker key | `submitFor`, `submitForBatch` |
@@ -124,7 +126,7 @@ deploying account gets no role.
 
 ### Pause and incidents
 
-The steward pauses both contracts from the admin panel in minutes; only the admin (cold wallet)
+The steward pauses both contracts from their wallet in minutes; only the admin (cold wallet)
 unpauses. While paused every write stops except `correctResult`, `cancelRound`, the admin
 functions (including `grantRole`/`revokeRole`) and the views. A pause near a lock loses that round's late submissions:
 cancel it.

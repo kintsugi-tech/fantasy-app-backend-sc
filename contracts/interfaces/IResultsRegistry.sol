@@ -65,7 +65,7 @@ interface IResultsRegistry {
         uint8 targetScore;
         bool drawAllowed;
         bytes32 sourceHash; // the attestation id is in the ResultRecorded / ResultCorrected event
-        uint48 correctableUntil; // set with the result (recordedAt + correctionWindow); 0 once corrected
+        uint64 correctableUntil; // set with the result (recordedAt + correctionWindow); 0 once corrected
         bool corrected; // the steward corrected the result: it can never change again
     }
 
@@ -73,7 +73,7 @@ interface IResultsRegistry {
 
     /// @notice Whether the game has a result (or was voided). The steward may still correct it once,
     ///         until `correctableUntil`.
-    function isFinal(bytes32 gameId) external view returns (bool);
+    function hasResult(bytes32 gameId) external view returns (bool);
 
     /// @notice Until when the steward may correct the game's result: 0 while it has no result or
     ///         once it was corrected, after which the result never changes. Fixed when the result
