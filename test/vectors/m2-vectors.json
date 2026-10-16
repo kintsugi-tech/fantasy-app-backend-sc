@@ -1,7 +1,7 @@
 {
   "description": "M2 encoding vectors. Regenerate with `pnpm vectors`; never edit by hand.",
   "domain": {
-    "name": "M2Predictions",
+    "name": "Predictions",
     "version": "1",
     "chainId": 1439,
     "verifyingContract": "0x1111111111111111111111111111111111111111"
@@ -13,11 +13,7 @@
   "round": {
     "matchday": 7,
     "roundId": "0xa8db9146f3839d6c3a776cae6d60d8b4cf5473c138765ec84e9642fb7e957197",
-    "canonicalGameIds": [
-      "mvl-2026-27-000101",
-      "mvl-2026-27-000102",
-      "mvl-2026-27-000103"
-    ],
+    "canonicalGameIds": ["mvl-2026-27-000101", "mvl-2026-27-000102", "mvl-2026-27-000103"],
     "gameIds": [
       "0x927899a549c99aa2f9944dbf5a0728ca1fea9806aa8047099533d1ae5e0a9e5c",
       "0xddcc59a6b153b4ecc5a6cf40faa78b92b5234c59b191d6154bab1e96d0872e06",
@@ -80,11 +76,7 @@
     "sourceHash": "0x48be89e16c0c45a7964acee4bf6ae5c9dc62359e9d891a09d3ba89d816aab755"
   },
   "scoring": {
-    "outcomes": [
-      1,
-      0,
-      3
-    ],
+    "outcomes": [1, 0, 3],
     "scores": [
       {
         "correct": 1,
@@ -137,9 +129,7 @@
         "counted": 2,
         "roundsPlayed": 1,
         "sumLeadTime": "3600",
-        "proof": [
-          "0x3d168782d80058e8a05bebd3e3ac5d32a266d25846f5ec44a1ee0db4093cb341"
-        ]
+        "proof": ["0x3d168782d80058e8a05bebd3e3ac5d32a266d25846f5ec44a1ee0db4093cb341"]
       }
     ]
   }

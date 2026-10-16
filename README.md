@@ -4,10 +4,10 @@ Smart contracts for M2, the free-to-play prediction game on the Mongolian volley
 **Injective EVM** (chainId 1439 testnet, 1776 mainnet). Off-chain code (PWA, admin, API, worker)
 lives in `injective-m2-frontend`.
 
-| Contract | Role |
-|---|---|
+| Contract          | Role                                                                                                                                                                                                |
+| ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `ResultsRegistry` | Per-game fixtures and results. Results come from LocalTruth attestations (CosmWasm); `sourceHash` is the attested file's SHA-256. The steward can correct a result once, within `correctionWindow`. |
-| `Predictions` | Leagues, rounds (matchdays), users' signed predictions, round settlement, on-chain layer-0 scoring, final standings root (proposed, anchored once 48 h later). |
+| `Predictions`     | Leagues, rounds (matchdays), users' signed predictions, round settlement, on-chain layer-0 scoring, final standings root (proposed, anchored once 48 h later).                                      |
 
 ## How it works
 
@@ -74,6 +74,7 @@ Key rules:
   two windows are set to: a settled round never misses a correction. If the correction is wrong
   too, or the window has closed, the steward can still cancel the round before it settles (see
   "Pause and incidents").
+
 - A game with no result `postponeWindow` (7 days) after its start can be voided by the steward, so a
   round is never blocked by a game that is never played nor uploaded. As a started game never
   moves, that date is fixed once the start has passed. It is a minimum, not a deadline: until the
@@ -97,11 +98,11 @@ points stay in the attested file that `sourceHash` points to. Each game is regis
 format, and `recordResults` checks every result against it. The format is per game, so another
 head-to-head sport needs no contract change, only its format (set in the app's CMS):
 
-| Format | `targetScore` | `drawAllowed` | A valid `Final` |
-|---|---|---|---|
-| Race to N (volleyball: N = 3 sets) | N | no | the winner has exactly N: 3-0, 3-1, 3-2 |
-| Open score | 0 | no | any score, the side ahead wins |
-| Open score with draws | 0 | yes | any score; a level score is `Draw` |
+| Format                             | `targetScore` | `drawAllowed` | A valid `Final`                         |
+| ---------------------------------- | ------------- | ------------- | --------------------------------------- |
+| Race to N (volleyball: N = 3 sets) | N             | no            | the winner has exactly N: 3-0, 3-1, 3-2 |
+| Open score                         | 0             | no            | any score, the side ahead wins          |
+| Open score with draws              | 0             | yes           | any score; a level score is `Draw`      |
 
 - With a target there are no `extraPeriods` and no draws (registering both is refused).
 - `extraPeriods` counts periods past regulation, for sports that have them; always 0 in volleyball.
@@ -113,13 +114,13 @@ head-to-head sport needs no contract change, only its format (set in the app's C
 
 ### Roles
 
-| Role | Holder | Can |
-|---|---|---|
-| `DEFAULT_ADMIN_ROLE` | cold wallet (2-step transfer with delay) | roles, `unpause`, `setPostponeWindow`, `setCorrectionWindow`, `setFinalizationDelay`, `withdrawStandings` |
-| `STEWARD_ROLE` | a person, signing from their own wallet (the app's inbox prepares the calls) | `pause`, `voidGame`, `correctResult`, `cancelRound`, `proposeStandings`, `finalizeLeague` |
-| `OPERATOR_ROLE` | worker key | fixtures, leagues, rounds, lock updates |
-| `RESULTS_RELAYER_ROLE` | worker key | `recordResults` |
-| `SUBMITTER_ROLE` | worker key | `submitFor`, `submitForBatch` |
+| Role                   | Holder                                                                       | Can                                                                                                       |
+| ---------------------- | ---------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| `DEFAULT_ADMIN_ROLE`   | cold wallet (2-step transfer with delay)                                     | roles, `unpause`, `setPostponeWindow`, `setCorrectionWindow`, `setFinalizationDelay`, `withdrawStandings` |
+| `STEWARD_ROLE`         | a person, signing from their own wallet (the app's inbox prepares the calls) | `pause`, `voidGame`, `correctResult`, `cancelRound`, `proposeStandings`, `finalizeLeague`                 |
+| `OPERATOR_ROLE`        | worker key                                                                   | fixtures, leagues, rounds, lock updates                                                                   |
+| `RESULTS_RELAYER_ROLE` | worker key                                                                   | `recordResults`                                                                                           |
+| `SUBMITTER_ROLE`       | worker key                                                                   | `submitFor`, `submitForBatch`                                                                             |
 
 Use one key per queue to avoid nonce contention. Every holder is a constructor argument: the
 deploying account gets no role.
@@ -152,7 +153,7 @@ the TypeScript tests check them, so the app can rely on them.
 - `gameId = keccak256(bytes("mvl-2026-27-000123"))`, `leagueId = keccak256(bytes(slug))`
 - `roundId = keccak256(abi.encode(leagueId, uint16 matchday))`, never reused
 - team code = bytes32 short string (`bytes32("UB_BRONCOS")`)
-- EIP-712 domain `("M2Predictions", "1", chainId, predictions)`, type
+- EIP-712 domain `("Predictions", "1", chainId, predictions)`, type
   `Submission(address user,bytes32 roundId,bytes32 picksHash,uint64 confirmedAt)`
 - standings leaf (OZ `StandardMerkleTree`, `IPredictions.StandingLeaf`):
   `(bytes32 leagueId, address account, uint32 rank, uint32 points, uint32 correct, uint32 counted, uint16 roundsPlayed, uint64 sumLeadTime)`

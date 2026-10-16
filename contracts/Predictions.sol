@@ -171,7 +171,7 @@ contract Predictions is IPredictions, AccessControlDefaultAdminRules, Pausable, 
         address submitter,
         address steward,
         uint64 initialFinalizationDelay
-    ) AccessControlDefaultAdminRules(adminDelay, admin) EIP712("M2Predictions", "1") {
+    ) AccessControlDefaultAdminRules(adminDelay, admin) EIP712("Predictions", "1") {
         if (
             address(registry_) == address(0) ||
             operator == address(0) ||

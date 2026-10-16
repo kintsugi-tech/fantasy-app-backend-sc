@@ -75,7 +75,7 @@ export const picksHashOf = (roundId: Hex, gamesHash: Hex, picks: Hex): Hex =>
 // --- EIP-712 ----------------------------------------------------------------------------------
 
 export const eip712Domain = (chainId: number, verifyingContract: Address) =>
-  ({ name: 'M2Predictions', version: '1', chainId, verifyingContract }) as const
+  ({ name: 'Predictions', version: '1', chainId, verifyingContract }) as const
 
 export const submissionTypes = {
   Submission: [
