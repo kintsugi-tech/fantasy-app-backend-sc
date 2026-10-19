@@ -65,7 +65,7 @@ export default defineConfig({
         blockscout: {
           name: 'Injective Testnet Blockscout',
           url: 'https://testnet.blockscout.injective.network/',
-          apiUrl: 'https://testnet.blockscout-api.injective.network/api',
+          apiUrl: 'https://testnet.blockscout.injective.network/api',
         },
       },
     },
@@ -82,6 +82,7 @@ export default defineConfig({
     },
   },
   verify: {
+    etherscan: { enabled: false },
     blockscout: { enabled: true },
     sourcify: { enabled: false },
   },
