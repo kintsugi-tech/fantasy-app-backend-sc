@@ -1,0 +1,13 @@
+{
+  "M2": {
+    "admin": "0xC81BA711Ae94Ca659957058c6E143DC8d19Fddd9",
+    "adminDelay": 0,
+    "postponeWindow": "604800n",
+    "finalizationDelay": "3600n",
+    "correctionWindow": "3600n",
+    "operator": "0x6Fd2A927F8E747C9f5a345aAe43121a1EAca83E1",
+    "resultsRelayer": "0x6Fd2A927F8E747C9f5a345aAe43121a1EAca83E1",
+    "submitter": "0x6Fd2A927F8E747C9f5a345aAe43121a1EAca83E1",
+    "steward": "0xC81BA711Ae94Ca659957058c6E143DC8d19Fddd9"
+  }
+}
