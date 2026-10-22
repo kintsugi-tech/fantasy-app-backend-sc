@@ -1,8 +1,7 @@
 # injective-m2-backend
 
-Smart contracts for M2, the free-to-play prediction game on the Mongolian volleyball league, on
-**Injective EVM** (chainId 1439 testnet, 1776 mainnet). Off-chain code (PWA, admin, API, worker)
-lives in `injective-m2-frontend`.
+Smart contracts for M2, a free-to-play sports prediction game, on **Injective EVM** (chainId 1439
+testnet, 1776 mainnet). Off-chain code (PWA, admin, API, worker) lives in `injective-m2-frontend`.
 
 | Contract          | Role                                                                                                                                                                                                |
 | ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -64,9 +63,9 @@ Key rules:
   to start sooner than that cannot keep its round's lock before it, so it does not count there.
 - Home/away teams are registered with the fixture; `recordResults` rejects a swapped file.
 - **Results can be corrected once, by the steward.** They come from an accredited institutional
-  source (MSC, attested on LocalTruth), so there is no challenge period: the relayer writes the
+  source (attested on LocalTruth), so there is no challenge period: the relayer writes the
   first attested result. No result is accepted before the start, `Void` included. The risk is a
-  relayer bug (e.g. a row matched to the wrong game, home and away sets swapped) that the on-chain
+  relayer bug (e.g. a row matched to the wrong game, home and away scores swapped) that the on-chain
   checks do not catch, or a wrong attestation. The remedy is `correctResult`:
   - once per game, within `correctionWindow` (24 h, admin-settable between 1 h and 7 days) of
     its result; the deadline is fixed when the result is written, so a later change of the window
@@ -101,19 +100,20 @@ Key rules:
 
 ### Results and game formats
 
-`homeScore`/`awayScore` hold the unit that decides the winner: sets in volleyball. Set by set
-points stay in the attested file that `sourceHash` points to. Each game is registered with its
-format, and `recordResults` checks every result against it. The format is per game, so another
-head-to-head sport needs no contract change, only its format (set in the app's CMS):
+`homeScore`/`awayScore` hold the unit that decides the winner (e.g. sets, points or goals,
+depending on the sport). Partial scores stay in the attested file that `sourceHash` points to. Each
+game is registered with its format, and `recordResults` checks every result against it. The format
+is per game, so any head-to-head sport needs no contract change, only its format (set in the app's
+CMS):
 
 | Format                             | `targetScore` | `drawAllowed` | A valid `Final`                         |
 | ---------------------------------- | ------------- | ------------- | --------------------------------------- |
-| Race to N (volleyball: N = 3 sets) | N             | no            | the winner has exactly N: 3-0, 3-1, 3-2 |
+| Race to N (e.g. best of 5: N = 3)  | N             | no            | the winner has exactly N: 3-0, 3-1, 3-2 |
 | Open score                         | 0             | no            | any score, the side ahead wins          |
 | Open score with draws              | 0             | yes           | any score; a level score is `Draw`      |
 
 - With a target there are no `extraPeriods` and no draws (registering both is refused).
-- `extraPeriods` counts periods past regulation, for sports that have them; always 0 in volleyball.
+- `extraPeriods` counts periods past regulation (e.g. overtime), for sports that have them.
 - `Forfeit`: the winner is `Home` or `Away`, the score is 0-0 or the winner is ahead, never past
   the target.
 - `Side.Draw` is 3, so it fits the 2 bits per game used for picks and outcomes.

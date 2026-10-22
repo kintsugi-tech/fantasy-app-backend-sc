@@ -7,10 +7,10 @@ import {Pausable} from "@openzeppelin/contracts/utils/Pausable.sol";
 import {IResultsRegistry} from "./interfaces/IResultsRegistry.sol";
 
 /// @title ResultsRegistry
-/// @notice Per-game results of the real-world competition (volleyball), keyed by game so that one
-///         file per game or one file per matchday makes no difference. Each game is registered with
-///         its format (`targetScore`, `drawAllowed`), which is what a result is checked against: so
-///         another head-to-head sport needs no change here.
+/// @notice Per-game results of real-world head-to-head sports competitions, keyed by game so that
+///         one file per game or one file per matchday makes no difference. Each game is registered
+///         with its format (`targetScore`, `drawAllowed`), which is what a result is checked
+///         against: so any head-to-head sport is supported with no change here.
 ///
 ///         Lifecycle of a game:
 ///           registerGames (operator)  ->  Scheduled (only with a future start time)
@@ -139,7 +139,7 @@ contract ResultsRegistry is IResultsRegistry, AccessControlDefaultAdminRules, Pa
                 info.awayTeam == bytes32(0) ||
                 info.homeTeam == info.awayTeam ||
                 info.startTime == 0 ||
-                (info.targetScore != 0 && info.drawAllowed) // a race to N sets has no draws
+                (info.targetScore != 0 && info.drawAllowed) // a race to N has no draws
             ) revert InvalidGameInfo(info.gameId);
             if (info.startTime <= block.timestamp) revert StartTimeInPast(info.gameId, info.startTime);
             Game storage g = _games[info.gameId];
@@ -335,7 +335,7 @@ contract ResultsRegistry is IResultsRegistry, AccessControlDefaultAdminRules, Pa
             if (r.homeScore == r.awayScore) {
                 ok = r.winner == Side.Draw && g.drawAllowed;
             } else {
-                // The winner is the side ahead; in a race to N sets it reached N, with no extra periods.
+                // The winner is the side ahead; in a race to N it reached N, with no extra periods.
                 bool homeLeads = r.homeScore > r.awayScore;
                 uint16 winnerScore = homeLeads ? r.homeScore : r.awayScore;
                 ok =

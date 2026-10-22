@@ -2,11 +2,11 @@
 pragma solidity ^0.8.28;
 
 /// @title IResultsRegistry
-/// @notice Per-game results of the real-world competition, anchored to LocalTruth attestations.
+/// @notice Per-game results of real-world sports competitions, anchored to LocalTruth attestations.
 ///
-///         The scores are the unit that decides the winner (sets in volleyball); partial scores
-///         (set by set) stay in the attested file, which `sourceHash` points to. Each game carries
-///         its format, so another head-to-head sport needs no change here.
+///         The scores are the unit that decides the winner (e.g. sets, points or goals, depending on
+///         the sport); partial scores stay in the attested file, which `sourceHash` points to. Each
+///         game carries its format, so any head-to-head sport needs no change here.
 interface IResultsRegistry {
     enum GameStatus {
         None, // never registered
@@ -26,7 +26,7 @@ interface IResultsRegistry {
 
     /// @notice Fixture data, registered before the game can be used in a round.
     ///         The format says how a result is checked:
-    ///           targetScore N   the winner is the first side to reach N (volleyball: 3 sets)
+    ///           targetScore N   the winner is the first side to reach N (e.g. 3 sets in a best of 5)
     ///           targetScore 0   open score: the side ahead wins
     ///           drawAllowed     an open score may end level (Side.Draw)
     struct GameInfo {
@@ -38,7 +38,7 @@ interface IResultsRegistry {
         bool drawAllowed; // only with an open score
     }
 
-    /// @notice A result read from an attested MSC file.
+    /// @notice A result read from an attested results file.
     struct ResultInput {
         bytes32 gameId;
         bytes32 homeTeam; // must match the registered fixture (guards against a home/away swap)

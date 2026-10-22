@@ -25,7 +25,7 @@ export const OUTCOME = { NOT_COUNTED: 0, HOME: 1, AWAY: 2, DRAW: 3 } as const
 /**
  * A game's format, registered with it (ResultsRegistry.GameInfo): targetScore 0 = open score (the
  * side ahead wins), N = the first side to reach N wins; drawAllowed only with an open score.
- * The scores recorded are the unit that decides the winner (e.g. sets in volleyball).
+ * The scores recorded are the unit that decides the winner (e.g. sets, points or goals).
  */
 export type GameFormat = { targetScore: number; drawAllowed: boolean }
 
