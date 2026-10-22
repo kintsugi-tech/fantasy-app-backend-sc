@@ -1,6 +1,6 @@
 {
   "M2": {
-    "admin": "0x<cold wallet>",
+    "admin": "0x<admin Safe multisig 2-of-3>",
     "adminDelay": 172800,
     "postponeWindow": "604800n",
     "finalizationDelay": "86400n",
@@ -8,6 +8,6 @@
     "operator": "0x<worker operator key>",
     "resultsRelayer": "0x<worker results relayer key>",
     "submitter": "0x<worker submitter key>",
-    "steward": "0x<steward browser wallet, also pauses>"
+    "steward": "0x<steward Safe multisig 2-of-3, also pauses>"
   }
 }

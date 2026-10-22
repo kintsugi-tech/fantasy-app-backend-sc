@@ -28,8 +28,8 @@ import {IResultsRegistry} from "./interfaces/IResultsRegistry.sol";
 ///         by the steward, with the same checks. Predictions settles a round only once none of its
 ///         results can change and `finalizationDelay` has passed since the last of them.
 ///
-///         Pause: the steward stops every write but `correctResult` in minutes; only the admin
-///         (cold wallet) resumes.
+///         Pause: the steward stops every write but `correctResult` and the admin functions in
+///         minutes; only the admin (Safe multisig, 2-of-3) resumes.
 contract ResultsRegistry is IResultsRegistry, AccessControlDefaultAdminRules, Pausable {
     bytes32 public constant OPERATOR_ROLE = keccak256("OPERATOR_ROLE");
     bytes32 public constant RESULTS_RELAYER_ROLE = keccak256("RESULTS_RELAYER_ROLE");
@@ -267,7 +267,7 @@ contract ResultsRegistry is IResultsRegistry, AccessControlDefaultAdminRules, Pa
         _setCorrectionWindow(window);
     }
 
-    /// @notice The steward's hot wallet can stop the registry in minutes; only the admin resumes it.
+    /// @notice The steward can stop the registry in minutes; only the admin resumes it.
     function pause() external onlyRole(STEWARD_ROLE) {
         _pause();
     }

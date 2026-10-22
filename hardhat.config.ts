@@ -75,7 +75,6 @@ export default defineConfig({
         blockscout: {
           name: 'Injective Blockscout',
           url: 'https://blockscout.injective.network/',
-          // TODO(F6): confirm the mainnet Blockscout API host before the first mainnet verify.
           apiUrl: 'https://blockscout-api.injective.network/api',
         },
       },

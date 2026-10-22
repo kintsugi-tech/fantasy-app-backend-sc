@@ -19,7 +19,7 @@ interface IPredictions {
     struct LeagueStats {
         uint32 points; // +1 per correct pick
         uint32 correct;
-        uint32 counted; // picks on games that counted (void games excluded)
+        uint32 counted; // picks on games that counted (void games and games started before the lock excluded)
         uint16 roundsPlayed; // finalized rounds with a submission and at least one counted game
         uint64 sumLeadTime; // sum over rounds played of (lockTime - confirmedAt), for the tie-break
     }

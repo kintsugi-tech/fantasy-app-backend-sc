@@ -39,12 +39,20 @@ Key rules:
   only there).
 - `picksHash = keccak256(abi.encode(roundId, gamesHash, keccak256(picks)))` is recomputed by the
   contract; it is the receipt the app shows.
+- `confirmedAt` (signed by the user) must be in `[opensAt, lockTime)` and at most `MAX_CLOCK_SKEW`
+  (60 s) ahead of the block time. `submitFor` reverts on an invalid item (`SubmissionRejected`);
+  `submitForBatch` skips it (`SubmissionSkipped` event plus a status per item), so a retried batch
+  is harmless. The signature is checked with `ECDSA.tryRecover` (no malleable signatures).
+- Limits: 32 games per round (2-bit packing in a `uint64`), 64 rounds per league, 100 items per
+  batch (`registerGames`, `recordResults`, `submitForBatch`). A round's game list is immutable and
+  its id is never reused, so a signature can never be replayed onto other games.
 - A game counts in a round only if it was `Final`/`Forfeit` and did not start before the lock.
-  `registerGames` takes only future start times (`StartTimeInPast`), and `rescheduleGame` only moves a game that has not started yet, to a future time: once its start
-  time has passed it never moves again (`GameAlreadyStarted`), and from that same instant it takes
-  a result. So at the lock the games that can count in a round are fixed: one that started before
-  the lock never comes back (picks confirmed after it was played would score on it), one that
-  starts after can only move later. Only a void removes a game afterwards.
+  `registerGames` takes only future start times (`StartTimeInPast`), and `rescheduleGame` only moves
+  a game that has not started yet, to a future time: once its start time has passed it never moves
+  again (`GameAlreadyStarted`), and from that same instant it takes a result. So at the lock the
+  games that can count in a round are fixed: one that started before the lock never comes back
+  (picks confirmed after it was played would score on it), one that starts after can only move
+  later. Only a void removes a game afterwards.
 - **Postponements.** Known before the start: `rescheduleGame` to the new date. Known after it: the
   start time stays; the replay's result is recorded on the same game id and counts in the round,
   with the same score as if the date had moved. Until then nothing on-chain refuses an early
@@ -75,19 +83,19 @@ Key rules:
   too, or the window has closed, the steward can still cancel the round before it settles (see
   "Pause and incidents").
 
-- A game with no result `postponeWindow` (7 days) after its start can be voided by the steward, so a
-  round is never blocked by a game that is never played nor uploaded. As a started game never
-  moves, that date is fixed once the start has passed. It is a minimum, not a deadline: until the
-  steward voids it, a late replay is still recorded and counts.
-- **Final standings in two steps.** The steward proposes the root once every round is settled; a
-  new proposal replaces it and restarts the 48 h review. During the review `checkStanding`
-  verifies any row against the proposed root and against `leagueStatsOf`, so a wrong row is
-  provable on-chain. From the first proposal on, `scheduleRound` refuses new rounds for the league
-  (`StandingsAlreadyProposed`): the season is over, and the operator key cannot hold up
-  `finalizeLeague`. The review starts only when the steward proposes; the app's worker prepares
-  the standings once the league's `endsAt` has passed and every round is settled. A proposal made
-  too early (e.g. a wrong end date) would end the season: only the admin can undo it,
-  `withdrawStandings(leagueId)`, and the league then takes rounds again.
+- A game with no result `postponeWindow` (7 days, admin-settable between 1 and 30 days) after its
+  start can be voided by the steward, so a round is never blocked by a game that is never played nor
+  uploaded. As a started game never moves, that date is fixed once the start has passed. It is a
+  minimum, not a deadline: until the steward voids it, a late replay is still recorded and counts.
+- **Final standings in two steps.** The steward proposes the root once every round of the league is
+  finalized or cancelled (at least one finalized); a new proposal replaces it and restarts the 48 h
+  review. During the review `checkStanding` verifies any row against the proposed root and against
+  `leagueStatsOf`, so a wrong row is provable on-chain. From the first proposal on, `scheduleRound`
+  refuses new rounds for the league (`StandingsAlreadyProposed`): the season is over, and the
+  operator key cannot hold up `finalizeLeague`. The review starts only when the steward proposes;
+  the app's worker prepares the standings once the league's `endsAt` has passed and every round is
+  settled. A proposal made too early (e.g. a wrong end date) would end the season: only the admin
+  can undo it, `withdrawStandings(leagueId)`, and the league then takes rounds again.
 - Tie-break (off-chain, from on-chain data): points → rounds played → average lead time before the
   lock (`sumLeadTime / roundsPlayed`) → verifiable draw.
 
@@ -116,8 +124,8 @@ head-to-head sport needs no contract change, only its format (set in the app's C
 
 | Role                   | Holder                                                                       | Can                                                                                                       |
 | ---------------------- | ---------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
-| `DEFAULT_ADMIN_ROLE`   | cold wallet (2-step transfer with delay)                                     | roles, `unpause`, `setPostponeWindow`, `setCorrectionWindow`, `setFinalizationDelay`, `withdrawStandings` |
-| `STEWARD_ROLE`         | a person, signing from their own wallet (the app's inbox prepares the calls) | `pause`, `voidGame`, `correctResult`, `cancelRound`, `proposeStandings`, `finalizeLeague`                 |
+| `DEFAULT_ADMIN_ROLE`   | Safe multisig, 2-of-3 (2-step transfer with delay)                           | roles, `unpause`, `setPostponeWindow`, `setCorrectionWindow`, `setFinalizationDelay`, `withdrawStandings` |
+| `STEWARD_ROLE`         | Safe multisig, 2-of-3 (the app's inbox prepares the calls)                   | `pause`, `voidGame`, `correctResult`, `cancelRound`, `proposeStandings`, `finalizeLeague`                 |
 | `OPERATOR_ROLE`        | worker key                                                                   | fixtures, leagues, rounds, lock updates                                                                   |
 | `RESULTS_RELAYER_ROLE` | worker key                                                                   | `recordResults`                                                                                           |
 | `SUBMITTER_ROLE`       | worker key                                                                   | `submitFor`, `submitForBatch`                                                                             |
@@ -127,10 +135,10 @@ deploying account gets no role.
 
 ### Pause and incidents
 
-The steward pauses both contracts from their wallet in minutes; only the admin (cold wallet)
-unpauses. While paused every write stops except `correctResult`, `cancelRound`, the admin
-functions (including `grantRole`/`revokeRole`) and the views. A pause near a lock loses that round's late submissions:
-cancel it.
+The steward (Safe multisig, 2-of-3) pauses both contracts in minutes; only the admin (Safe
+multisig, 2-of-3) unpauses. While paused every write stops except `correctResult`, `cancelRound`,
+the admin functions (including `grantRole`/`revokeRole`) and the views. A pause near a lock loses
+that round's late submissions: cancel it.
 
 - **Wrong result recorded:** within `correctableUntil` of the game (the worker's inbox shows it),
   the steward calls `correctResult` with the right result. No pause is needed: the correction
@@ -166,17 +174,53 @@ Requires Node ≥ 22.10 and pnpm 10.
 pnpm install
 pnpm build              # compile
 pnpm test               # Solidity (unit, fuzz, invariants, vectors) + TypeScript (season flow, gas)
+pnpm test:sol           # Solidity tests only
+pnpm test:ts            # TypeScript tests only
 pnpm coverage
 pnpm typecheck
 pnpm vectors            # regenerate test/vectors/m2-vectors.json (CI checks it is up to date)
 pnpm export-abi         # ABIs, addresses, encoding lib and vectors -> ../injective-m2-frontend/packages/chain/src/generated
+                        # (override the target with M2_EXPORT_DIR)
 ```
+
+| Test file                         | What it covers                                                                  |
+| --------------------------------- | ------------------------------------------------------------------------------- |
+| `test/ResultsRegistry.t.sol`      | fixtures, rescheduling, results and formats, voids, corrections, pause, admin   |
+| `test/Predictions.t.sol`          | rounds, submissions, lock moves, settlement, postponements, standings, fuzzing  |
+| `test/Guards.t.sol`               | constructor, state-machine and pause guards                                     |
+| `test/PredictionsInvariant.t.sol` | invariants over random submissions, moves, results, corrections and settlement  |
+| `test/Vectors.t.sol`              | Solidity encodings against `test/vectors/m2-vectors.json`                       |
+| `test/SeasonFlow.ts`              | a full season with viem (custodial keys, EIP-712, corrections, standings), gas  |
+
+CI (`.github/workflows/ci.yml`) runs the build, the typecheck, the tests with coverage, the vectors
+check and [Slither](https://github.com/crytic/slither) (`slither contracts --config-file
+slither.config.json`, fails on medium or higher findings).
+
+### Local node
+
+```bash
+pnpm node                       # Hardhat node, chainId 31337
+pnpm deploy:localhost           # ignition/parameters/localhost.json (Hardhat default accounts)
+pnpm check-deploy:localhost
+```
+
+## Deployments
+
+| Network                        | `ResultsRegistry`                            | `Predictions`                                |
+| ------------------------------ | -------------------------------------------- | -------------------------------------------- |
+| Injective EVM testnet (`1439`) | `0x5E482d982f71158cBe1C811cD6086865bDF5D678` | `0xe6189297DF3B228248491c6D7AaDA78f90e09c51` |
+
+Testnet parameters: `ignition/parameters/testnet.json` (1 h correction window and finalization
+delay, no admin delay). Not deployed on mainnet yet.
 
 ## Deploy
 
+Contracts are compiled with solc 0.8.28 (`cancun`, optimizer 200 runs); the `production` build
+profile used by the deploy scripts is identical to the one the tests run against.
+
 ```bash
 cp .env.example .env                                            # RPC + testnet deployer key
-cp ignition/parameters/testnet.example.json ignition/parameters/testnet.json   # admin + role holders
+# admin + role holders in ignition/parameters/testnet.json (template: testnet.example.json)
 pnpm deploy:testnet
 pnpm check-deploy:testnet                                       # admin, roles, parameters
 pnpm hardhat ignition verify chain-1439                         # Blockscout
@@ -193,8 +237,8 @@ role and only pays the gas. Anyone can deploy: us, or an account Injective autho
 
 1. Ask Injective whether deployment is permissioned (EVM `authorized_deployers`): either our
    deployer gets authorized, or an authorized account deploys for us.
-2. Fill `ignition/parameters/mainnet.json` from `mainnet.example.json`: admin = cold wallet,
-   `adminDelay` = 2 days, the worker keys, the steward wallet.
+2. Fill `ignition/parameters/mainnet.json` from `mainnet.example.json`: admin = the admin Safe
+   (2-of-3), `adminDelay` = 2 days, the worker keys, steward = the steward Safe (2-of-3).
 3. Deploy from a tagged commit:
    - **we deploy:** `pnpm hardhat keystore set INJECTIVE_MAINNET_DEPLOYER_KEY`, then
      `pnpm deploy:mainnet`;
@@ -203,7 +247,8 @@ role and only pays the gas. Anyone can deploy: us, or an account Injective autho
      deployment block.
 4. Check it: `pnpm check-deploy:mainnet` (for a third-party deploy also set `M2_REGISTRY`,
    `M2_PREDICTIONS`, `M2_DEPLOYER`, `M2_FROM_BLOCK`). It fails if the admin, its delay, any role
-   holder or parameter differs, or if any other address (the deployer included) holds a role.
+   holder or parameter differs, if an admin transfer is pending, if a contract is paused, or if any
+   other address (the deployer included) holds a role.
 5. Verify the sources on Blockscout (`pnpm hardhat ignition verify chain-1776`, or by address if
    the journal is elsewhere): verification does not require being the deployer.
 6. Fund the worker keys with INJ, run `pnpm export-abi`, commit `ignition/deployments/chain-1776`

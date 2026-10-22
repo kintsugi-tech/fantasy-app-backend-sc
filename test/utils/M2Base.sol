@@ -160,7 +160,7 @@ abstract contract M2Base is Test {
         registry.recordResults(batch);
     }
 
-    /// @dev Records final results for all games (true = home wins); they are final right away.
+    /// @dev Records final results for all games (true = home wins).
     function _settleGames(bytes32[] memory ids, bool[] memory homeWins) internal {
         IResultsRegistry.ResultInput[] memory batch = new IResultsRegistry.ResultInput[](ids.length);
         for (uint256 i = 0; i < ids.length; ++i) batch[i] = _final(ids[i], homeWins[i]);
@@ -168,7 +168,7 @@ abstract contract M2Base is Test {
         registry.recordResults(batch);
     }
 
-    /// @dev Waits out the finalization delay, then settles the round (permissionless).
+    /// @dev Waits until the round can settle, then settles it (permissionless).
     function _finalizeRound(bytes32 roundId) internal {
         uint64 readyAt = predictions.finalizableAt(roundId);
         if (block.timestamp < readyAt) vm.warp(readyAt);

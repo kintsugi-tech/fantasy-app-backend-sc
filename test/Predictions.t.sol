@@ -378,7 +378,7 @@ contract PredictionsTest is M2Base {
         _assertScore(alice, 2, 2);
     }
 
-    /// C5: a lock moved earlier stays after every stored confirmedAt (MIN_LOCK_NOTICE >
+    /// A lock moved earlier stays after every stored confirmedAt (MIN_LOCK_NOTICE >
     /// MAX_CLOCK_SKEW), so leagueStatsOf cannot underflow on `lockTime - confirmedAt`.
     function test_UpdateRoundLockStaysAfterSkewedConfirmations() public {
         assertGt(predictions.MIN_LOCK_NOTICE(), predictions.MAX_CLOCK_SKEW());
@@ -389,7 +389,7 @@ contract PredictionsTest is M2Base {
 
         vm.startPrank(operator);
         vm.expectRevert(Predictions.InvalidSchedule.selector);
-        predictions.updateRoundLock(roundId, now_ + 30); // the report's case: before confirmedAt
+        predictions.updateRoundLock(roundId, now_ + 30); // before confirmedAt
         predictions.updateRoundLock(roundId, now_ + predictions.MIN_LOCK_NOTICE());
         vm.stopPrank();
 
@@ -553,7 +553,7 @@ contract PredictionsTest is M2Base {
         vm.expectRevert(abi.encodeWithSelector(Predictions.NoResult.selector, games[2]));
         predictions.finalizeRound(roundId);
 
-        // Results are final right away; the round settles a full delay after the last one.
+        // The round settles a full delay after its last result.
         _record(_final(games[2], true));
         uint64 readyAt = uint64(block.timestamp) + FINALIZATION_DELAY;
         assertEq(predictions.finalizableAt(roundId), readyAt);
@@ -592,7 +592,7 @@ contract PredictionsTest is M2Base {
         _assertScore(alice, 1, 1);
     }
 
-    /// C1: once picks are locked no move can drop a game from the score: a game that has started
+    /// Once picks are locked no move can drop a game from the score: a game that has started
     /// keeps its start time, and one that has not can only move to the future, after the lock.
     function test_GameCannotBeDroppedAfterLock() public {
         _submit(aliceKey, alice, roundId, _picks(H, A, H));

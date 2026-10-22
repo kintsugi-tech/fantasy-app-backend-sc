@@ -5,7 +5,8 @@ import { buildModule } from '@nomicfoundation/hardhat-ignition/modules'
  *
  * The admin and every role holder are constructor arguments: the deploying account gets no role.
  * The deploy can therefore run from any account (for example one Injective authorized as a
- * deployer), and the admin is the cold wallet from the first block, with no hot-key window.
+ * deployer), and the admin is the admin Safe multisig (2-of-3) from the first block, with no
+ * single-key window.
  *
  * Parameters: see ignition/parameters/mainnet.example.json. Admin, admin delay and role holders
  * have no default on purpose, so a deploy can never silently grant a role to a placeholder.

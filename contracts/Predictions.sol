@@ -27,8 +27,8 @@ import {PicksLib} from "./libraries/PicksLib.sol";
 ///           Once proposed, the league takes no new round, unless the admin withdraws the
 ///           proposal (`withdrawStandings`, for one made too early).
 ///           Anyone can check a row against them and against the chain (`checkStanding`).
-///         - Pause: the steward stops everything but `cancelRound` in minutes; only the admin
-///           (cold wallet) resumes.
+///         - Pause: the steward stops every write but `cancelRound` and the admin functions in
+///           minutes; only the admin (Safe multisig, 2-of-3) resumes.
 contract Predictions is IPredictions, AccessControlDefaultAdminRules, Pausable, EIP712 {
     bytes32 public constant OPERATOR_ROLE = keccak256("OPERATOR_ROLE");
     bytes32 public constant SUBMITTER_ROLE = keccak256("SUBMITTER_ROLE");
@@ -424,7 +424,7 @@ contract Predictions is IPredictions, AccessControlDefaultAdminRules, Pausable, 
         _setFinalizationDelay(delay);
     }
 
-    /// @notice The steward's hot wallet can stop the contract in minutes; only the admin resumes it.
+    /// @notice The steward can stop the contract in minutes; only the admin resumes it.
     function pause() external onlyRole(STEWARD_ROLE) {
         _pause();
     }

@@ -13,7 +13,11 @@
   "round": {
     "matchday": 7,
     "roundId": "0xa8db9146f3839d6c3a776cae6d60d8b4cf5473c138765ec84e9642fb7e957197",
-    "canonicalGameIds": ["mvl-2026-27-000101", "mvl-2026-27-000102", "mvl-2026-27-000103"],
+    "canonicalGameIds": [
+      "mvl-2026-27-000101",
+      "mvl-2026-27-000102",
+      "mvl-2026-27-000103"
+    ],
     "gameIds": [
       "0x927899a549c99aa2f9944dbf5a0728ca1fea9806aa8047099533d1ae5e0a9e5c",
       "0xddcc59a6b153b4ecc5a6cf40faa78b92b5234c59b191d6154bab1e96d0872e06",
@@ -48,8 +52,8 @@
       "picks": "0x010201",
       "picksHash": "0xc54c442fe6181cb2d5a708a6429551703614a92937b7e443c6275477207aee64",
       "confirmedAt": "1800000000",
-      "digest": "0x5c6d8ee398b8d9db1a805331b7544470eb6c3ddb186f49b3f6109cf6aef79098",
-      "signature": "0x5bc3f846448b832a34977fee180aa8947a564ba36fb2546ad25c0948a8554eba4156e92ce7615a1fd90ae12792738f7df26793e9a5b163b0c965803fff63b8351b"
+      "digest": "0xb3efd5e65758afa5d67749b8b6362b07eddf67b2ae18ae604ca515919498e43d",
+      "signature": "0x1d84faf328a2a9efadb39afbc30c0af260ecc95935b81854f85a6b0f8ea0093235a44ebffa789c34ca0fdf8b67d10f66bab57858816c53906ff40bbe671664dd1b"
     },
     {
       "privateKeySeed": "m2-vector-user-1",
@@ -57,8 +61,8 @@
       "picks": "0x020202",
       "picksHash": "0xa13e2ae9c9ea398d54312d7478e5c0fc281d66145cc4cc1d66fdba488ec8f873",
       "confirmedAt": "1800003600",
-      "digest": "0xb8c52c4089cc33bf1002817fce1b15af225436ce5a58eed670d5d32b4b713f20",
-      "signature": "0x458506f42b61e31bb910b1b967cb57f8f5f889be2550db9c6eacca608d9a426d3fc65f7f7c9f7c759834872bd4439fd2a2d127e864e24ac816d190305441f26c1c"
+      "digest": "0xd138fc4f853a31c145713ca5da691212b917b6f67ab5ef44c8a693c0f7fded99",
+      "signature": "0x418a8bceac364a1ceb91a31d465dd174673ba37df0749cc14644f775a7ebe1f338a9e6eb7047b5ac3677f3ad38d10c9ecdacd4de45d94978d6c823d7c293b41d1b"
     },
     {
       "privateKeySeed": "m2-vector-user-2",
@@ -66,8 +70,8 @@
       "picks": "0x030103",
       "picksHash": "0xe50120673bc83d7e856e96716410b05fc283b8569c8cdd864de9a19fe67290db",
       "confirmedAt": "1800005400",
-      "digest": "0xda9c5b7e3d319c9b98ed0f57f056eae5e86da98465f832a75025d23bc0f0598f",
-      "signature": "0x906eb677bb2c9e663cd6777f3aa1e37e300e53f4b7c9aad73dd542b43e4593d71432872bcd6fb2760368c131f490e96057225acf8d4245aced0b641301f102ae1c"
+      "digest": "0xe4dabbdd94d053d729da6c33687550d27f337a0faef0d97929d93f4379abc185",
+      "signature": "0x64117dd79baf102ee6ec07b65ee217a4e06553a6d1a1f71f734958a64b8e1ae91ea1b44fedd209603e1f6ef435b759a7920c2db742eaff1570ced44b26b3609b1c"
     }
   ],
   "result": {
@@ -76,7 +80,11 @@
     "sourceHash": "0x48be89e16c0c45a7964acee4bf6ae5c9dc62359e9d891a09d3ba89d816aab755"
   },
   "scoring": {
-    "outcomes": [1, 0, 3],
+    "outcomes": [
+      1,
+      0,
+      3
+    ],
     "scores": [
       {
         "correct": 1,
@@ -129,7 +137,9 @@
         "counted": 2,
         "roundsPlayed": 1,
         "sumLeadTime": "3600",
-        "proof": ["0x3d168782d80058e8a05bebd3e3ac5d32a266d25846f5ec44a1ee0db4093cb341"]
+        "proof": [
+          "0x3d168782d80058e8a05bebd3e3ac5d32a266d25846f5ec44a1ee0db4093cb341"
+        ]
       }
     ]
   }

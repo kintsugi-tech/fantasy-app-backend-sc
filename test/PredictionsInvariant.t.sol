@@ -108,7 +108,7 @@ contract PredictionsHandler is Test {
     }
 
     /// The operator moves a game without a result anywhere from 1 day ago to 2 days ahead. Moves
-    /// to the past, and any move of a game that has started, must be rejected (C1); a rejected
+    /// to the past, and any move of a game that has started, must be rejected; a rejected
     /// call rolls back `lockedIn` too.
     function rescheduleGame(uint256 roundSeed, uint256 gameSeed, uint32 offset) external {
         bytes32 roundId = _round(roundSeed);
@@ -122,7 +122,7 @@ contract PredictionsHandler is Test {
     }
 
     /// The operator moves the lock of an open round to any future time not after its games, within
-    /// MIN_LOCK_NOTICE (hence within MAX_CLOCK_SKEW, C5) too: those moves must be rejected.
+    /// MIN_LOCK_NOTICE (hence within MAX_CLOCK_SKEW) too: those moves must be rejected.
     function updateRoundLock(uint256 roundSeed, uint32 offset) external {
         bytes32 roundId = _round(roundSeed);
         Predictions.Round memory r = predictions.getRound(roundId);
@@ -256,7 +256,7 @@ contract PredictionsInvariantTest is M2Base {
     }
 
     /// Stored predictions never change, match what was accepted, and stay before the round's lock
-    /// even after the lock moved (the C5 property).
+    /// even after the lock moved.
     function invariant_EntriesAreImmutable() public view {
         for (uint256 r = 0; r < handler.roundsLength(); ++r) {
             bytes32 roundId = handler.roundIds(r);
@@ -305,7 +305,7 @@ contract PredictionsInvariantTest is M2Base {
     }
 
     /// A finalized round's outcomes never change, and a game counts if and only if it was played
-    /// or forfeited and started at or after the lock (the C1 property).
+    /// or forfeited and started at or after the lock.
     function invariant_OnlyGamesStartedAfterTheLockCount() public view {
         for (uint256 r = 0; r < handler.roundsLength(); ++r) {
             bytes32 roundId = handler.roundIds(r);
