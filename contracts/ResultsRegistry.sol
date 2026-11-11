@@ -71,6 +71,7 @@ contract ResultsRegistry is IResultsRegistry, AccessControlDefaultAdminRules, Pa
     error CorrectionWindowClosed(bytes32 gameId, uint64 correctableUntil);
     error DelayOutOfRange(uint64 value);
     error EmptyReason();
+    error UnchangedResult(bytes32 gameId);
 
     event GameRegistered(
         bytes32 indexed gameId,
@@ -235,8 +236,10 @@ contract ResultsRegistry is IResultsRegistry, AccessControlDefaultAdminRules, Pa
 
     /// @notice Replace a game's result (or void) with the right one, once, within `correctionWindow`
     ///         of it. Same checks as recordResults; the source may be the same attested file (a
-    ///         parser bug) or a new one. `recordedAt` moves to now, so every round of the game
-    ///         gives the corrected result a full `finalizationDelay` before settling.
+    ///         parser bug) or a new one. It must change the result or its `sourceHash`: an
+    ///         identical correction reverts (`UnchangedResult`) and does not use up the correction.
+    ///         `recordedAt` moves to now, so every round of the game gives the corrected result a
+    ///         full `finalizationDelay` before settling.
     ///         Works while paused: pausing to stop the relayer, then correcting, is a remedy.
     function correctResult(ResultInput calldata r, string calldata reason) external onlyRole(STEWARD_ROLE) {
         if (bytes(reason).length == 0) revert EmptyReason();
@@ -244,6 +247,14 @@ contract ResultsRegistry is IResultsRegistry, AccessControlDefaultAdminRules, Pa
         if (g.recordedAt == 0) revert NoResult(r.gameId);
         if (g.corrected) revert AlreadyCorrected(r.gameId);
         if (block.timestamp >= g.correctableUntil) revert CorrectionWindowClosed(r.gameId, g.correctableUntil);
+        if (
+            r.status == g.status &&
+            r.winner == g.winner &&
+            r.homeScore == g.homeScore &&
+            r.awayScore == g.awayScore &&
+            r.extraPeriods == g.extraPeriods &&
+            r.sourceHash == g.sourceHash
+        ) revert UnchangedResult(r.gameId);
 
         _writeResult(g, r);
         g.correctableUntil = 0;

@@ -79,7 +79,9 @@ Key rules:
     its result; the deadline is fixed when the result is written, so a later change of the window
     never reopens it;
   - same checks as `recordResults`; the source may be the same attested file (parser bug) or a
-    new one; `ResultCorrected` carries both the result and the steward's reason;
+    new one; it must change the result or its `sourceHash`, otherwise it reverts
+    (`UnchangedResult`) and the correction is not used up; `ResultCorrected` carries both the
+    result and the steward's reason;
   - it also turns a void (by the relayer or `voidGame`) into a result;
   - it moves `recordedAt` to now, so every round of the game gives the corrected result a full
     `finalizationDelay`.
@@ -92,8 +94,11 @@ Key rules:
 
 - A game with no result `postponeWindow` (7 days, admin-settable between 1 and 30 days) after its
   start can be voided by the steward, so a round is never blocked by a game that is never played nor
-  uploaded. As a started game never moves, that date is fixed once the start has passed. It is a
-  minimum, not a deadline: until the steward voids it, a late replay is still recorded and counts.
+  uploaded. The start is fixed once it has passed, but the void date uses the current
+  `postponeWindow`: an admin change of the window moves it for every game still without a result
+  (later if increased, earlier if decreased). The steward can void only when
+  `block.timestamp > startTime + postponeWindow`. It is a minimum, not a deadline: until the
+  steward voids it, a late replay is still recorded and counts.
 - **Final standings in two steps.** The steward proposes the root once every round of the league is
   finalized or cancelled (at least one finalized); a new proposal replaces it and restarts the 48 h
   review. During the review `checkStanding` verifies any row against the proposed root and against
