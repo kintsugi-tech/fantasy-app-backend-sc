@@ -70,6 +70,7 @@ contract ResultsRegistry is IResultsRegistry, AccessControlDefaultAdminRules, Pa
     error AlreadyCorrected(bytes32 gameId);
     error CorrectionWindowClosed(bytes32 gameId, uint64 correctableUntil);
     error DelayOutOfRange(uint64 value);
+    error EmptyReason();
 
     event GameRegistered(
         bytes32 indexed gameId,
@@ -219,6 +220,7 @@ contract ResultsRegistry is IResultsRegistry, AccessControlDefaultAdminRules, Pa
     ///         It has no attested source: `sourceHash` stays 0, and its evidence is this call and
     ///         its `GameVoided` reason.
     function voidGame(bytes32 gameId, string calldata reason) external onlyRole(STEWARD_ROLE) whenNotPaused {
+        if (bytes(reason).length == 0) revert EmptyReason();
         Game storage g = _games[gameId];
         if (g.status != GameStatus.Scheduled) revert GameNotScheduled(gameId);
         uint64 voidableAt = g.startTime + postponeWindow;
@@ -237,6 +239,7 @@ contract ResultsRegistry is IResultsRegistry, AccessControlDefaultAdminRules, Pa
     ///         gives the corrected result a full `finalizationDelay` before settling.
     ///         Works while paused: pausing to stop the relayer, then correcting, is a remedy.
     function correctResult(ResultInput calldata r, string calldata reason) external onlyRole(STEWARD_ROLE) {
+        if (bytes(reason).length == 0) revert EmptyReason();
         Game storage g = _games[r.gameId];
         if (g.recordedAt == 0) revert NoResult(r.gameId);
         if (g.corrected) revert AlreadyCorrected(r.gameId);

@@ -121,7 +121,7 @@ contract PredictionsTest is M2Base {
     function test_CreateLeagueIsUniqueAndOperatorOnly() public {
         vm.prank(operator);
         vm.expectRevert(abi.encodeWithSelector(Predictions.LeagueExists.selector, LEAGUE));
-        predictions.createLeague(LEAGUE, bytes32(0));
+        predictions.createLeague(LEAGUE, keccak256("metadata"));
 
         bytes32 role = predictions.OPERATOR_ROLE();
         vm.prank(stranger);
@@ -995,7 +995,7 @@ contract PredictionsTest is M2Base {
         _settleGames(games, _bools(true, true, true));
         _finalizeRound(roundId);
         vm.prank(steward);
-        predictions.proposeStandings(LEAGUE, keccak256("root"), 10, bytes32(0), "");
+        predictions.proposeStandings(LEAGUE, keccak256("root"), 10, keccak256("report"), "ipfs://report");
 
         uint64 lock2 = uint64(block.timestamp) + 1 hours;
         bytes32[] memory more = _registerGames(1, lock2);
@@ -1004,7 +1004,7 @@ contract PredictionsTest is M2Base {
         predictions.scheduleRound(LEAGUE, 2, uint64(block.timestamp), lock2, more);
 
         vm.prank(steward);
-        predictions.proposeStandings(LEAGUE, keccak256("root2"), 10, bytes32(0), "");
+        predictions.proposeStandings(LEAGUE, keccak256("root2"), 10, keccak256("report"), "ipfs://report");
         vm.prank(operator);
         vm.expectRevert(abi.encodeWithSelector(Predictions.StandingsAlreadyProposed.selector, LEAGUE));
         predictions.scheduleRound(LEAGUE, 2, uint64(block.timestamp), lock2, more);
@@ -1025,7 +1025,7 @@ contract PredictionsTest is M2Base {
         vm.expectRevert(abi.encodeWithSelector(Predictions.NoStandingsProposal.selector, LEAGUE));
         predictions.withdrawStandings(LEAGUE);
         vm.prank(steward);
-        predictions.proposeStandings(LEAGUE, keccak256("early"), 10, bytes32(0), "");
+        predictions.proposeStandings(LEAGUE, keccak256("early"), 10, keccak256("report"), "ipfs://report");
 
         bytes32 role = predictions.DEFAULT_ADMIN_ROLE();
         address[2] memory others = [steward, operator];
@@ -1062,7 +1062,7 @@ contract PredictionsTest is M2Base {
         _record(_final(more[0], true));
         _finalizeRound(round2);
         vm.prank(steward);
-        predictions.proposeStandings(LEAGUE, keccak256("final"), 10, bytes32(0), "");
+        predictions.proposeStandings(LEAGUE, keccak256("final"), 10, keccak256("report"), "ipfs://report");
         vm.warp(block.timestamp + 48 hours);
         vm.prank(steward);
         predictions.finalizeLeague(LEAGUE);
@@ -1079,7 +1079,7 @@ contract PredictionsTest is M2Base {
         predictions.cancelRound(roundId, "cancelled");
         vm.prank(steward);
         vm.expectRevert(abi.encodeWithSelector(Predictions.RoundsPending.selector, LEAGUE));
-        predictions.proposeStandings(LEAGUE, keccak256("root"), 1, bytes32(0), "");
+        predictions.proposeStandings(LEAGUE, keccak256("root"), 1, keccak256("report"), "ipfs://report");
     }
 
     /// Anyone can check a row against the proposed root during the review, then the anchored one.
@@ -1090,7 +1090,7 @@ contract PredictionsTest is M2Base {
         assertTrue(matchesChain);
 
         vm.prank(steward);
-        predictions.proposeStandings(LEAGUE, _root(a, b), 2, bytes32(0), "");
+        predictions.proposeStandings(LEAGUE, _root(a, b), 2, keccak256("report"), "ipfs://report");
         (inTree, matchesChain) = predictions.checkStanding(LEAGUE, a, _proof(b));
         assertTrue(inTree && matchesChain);
 
@@ -1113,7 +1113,7 @@ contract PredictionsTest is M2Base {
         (IPredictions.StandingLeaf memory a, ) = _settleTwoPlayers();
         IPredictions.StandingLeaf memory inflated = IPredictions.StandingLeaf(LEAGUE, bob, 1, 3, 3, 3, 1, 1 hours);
         vm.prank(steward);
-        predictions.proposeStandings(LEAGUE, _root(a, inflated), 2, bytes32(0), "");
+        predictions.proposeStandings(LEAGUE, _root(a, inflated), 2, keccak256("report"), "ipfs://report");
         (bool inTree, bool matchesChain) = predictions.checkStanding(LEAGUE, inflated, _proof(a));
         assertTrue(inTree);
         assertFalse(matchesChain);

@@ -128,6 +128,8 @@ contract Predictions is IPredictions, AccessControlDefaultAdminRules, Pausable, 
     error EmptyBatch();
     error BatchTooLarge(uint256 size, uint256 max);
     error SubmissionRejected(address user, SubmitStatus status);
+    error EmptyReason();
+    error InvalidMetadata();
 
     event LeagueCreated(bytes32 indexed leagueId, bytes32 metadataHash);
     event RoundScheduled(
@@ -190,9 +192,10 @@ contract Predictions is IPredictions, AccessControlDefaultAdminRules, Pausable, 
     // ---------------------------------------------------------------------
 
     /// @param leagueId keccak256(bytes(slug))
-    /// @param metadataHash hash of the off-chain league metadata (rules, sponsor, prizes)
+    /// @param metadataHash hash of the off-chain league metadata (rules, sponsor, prizes); non-zero
     function createLeague(bytes32 leagueId, bytes32 metadataHash) external onlyRole(OPERATOR_ROLE) whenNotPaused {
         if (leagueId == bytes32(0)) revert InvalidLeague(leagueId);
+        if (metadataHash == bytes32(0)) revert InvalidMetadata();
         League storage l = _leagues[leagueId];
         if (l.exists) revert LeagueExists(leagueId);
         l.exists = true;
@@ -339,6 +342,7 @@ contract Predictions is IPredictions, AccessControlDefaultAdminRules, Pausable, 
     /// @notice Works while paused: pausing, cancelling the round, then unpausing is the remedy for
     ///         a round built on a wrong result.
     function cancelRound(bytes32 roundId, string calldata reason) external onlyRole(STEWARD_ROLE) {
+        if (bytes(reason).length == 0) revert EmptyReason();
         Round storage r = _rounds[roundId];
         if (r.state != RoundState.Scheduled) revert RoundNotActive(roundId);
         r.state = RoundState.Cancelled;
@@ -353,7 +357,8 @@ contract Predictions is IPredictions, AccessControlDefaultAdminRules, Pausable, 
     /// @param standingsRoot OZ StandardMerkleTree root of StandingLeaf rows
     ///        (bytes32 leagueId, address account, uint32 rank, uint32 points, uint32 correct,
     ///         uint32 counted, uint16 roundsPlayed, uint64 sumLeadTime)
-    /// @param reportHash hash of the published report (tree dump + standings) at `reportURI`
+    /// @param reportHash hash of the published report (tree dump + standings) at `reportURI`; both
+    ///        required (non-zero hash, non-empty URI)
     function proposeStandings(
         bytes32 leagueId,
         bytes32 standingsRoot,
@@ -363,7 +368,12 @@ contract Predictions is IPredictions, AccessControlDefaultAdminRules, Pausable, 
     ) external onlyRole(STEWARD_ROLE) whenNotPaused {
         League storage l = _leagues[leagueId];
         if (!l.exists || l.finalized) revert LeagueNotActive(leagueId);
-        if (standingsRoot == bytes32(0) || totalPlayers == 0) revert InvalidStandings();
+        if (
+            standingsRoot == bytes32(0) ||
+            totalPlayers == 0 ||
+            reportHash == bytes32(0) ||
+            bytes(reportURI).length == 0
+        ) revert InvalidStandings();
 
         bytes32[] storage roundIds = _leagueRounds[leagueId];
         bool anyFinalized = false;
