@@ -214,7 +214,10 @@ contract ResultsRegistry is IResultsRegistry, AccessControlDefaultAdminRules, Pa
     // Steward: discretionary actions
     // ---------------------------------------------------------------------
 
-    /// @notice Void a game that got no result within `postponeWindow` after its start. Final.
+    /// @notice Void a game that got no result within `postponeWindow` after its start. Like any
+    ///         result, the steward may correct it once within `correctionWindow` (correctResult).
+    ///         It has no attested source: `sourceHash` stays 0, and its evidence is this call and
+    ///         its `GameVoided` reason.
     function voidGame(bytes32 gameId, string calldata reason) external onlyRole(STEWARD_ROLE) whenNotPaused {
         Game storage g = _games[gameId];
         if (g.status != GameStatus.Scheduled) revert GameNotScheduled(gameId);

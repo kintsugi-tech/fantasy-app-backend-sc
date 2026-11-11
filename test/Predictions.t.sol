@@ -809,6 +809,43 @@ contract PredictionsTest is M2Base {
         _assertScore(alice, 2, 3);
     }
 
+    /// A forfeit decided before the start: the operator moves the game's start to the announcement
+    /// (rescheduleGame to now + a few minutes), then the relayer records the forfeit. The game
+    /// counts only in the rounds already locked at the announcement, whose picks were all made
+    /// without knowing it; in the rounds still open it counts for no one, including picks made
+    /// after the announcement.
+    function test_ForfeitDecidedBeforeTheLockCountsOnlyInLockedRounds() public {
+        uint64 start = T0 + 5 days;
+        bytes32[] memory g = _registerGames(1, start);
+        bytes32 lockedRound = _scheduleRound(10, g, T0, T0 + 1 days);
+        bytes32 openRound = _scheduleRound(11, g, T0, T0 + 4 days);
+        bytes memory home = abi.encodePacked(H);
+        bytes memory away = abi.encodePacked(A);
+        _submit(aliceKey, alice, lockedRound, home);
+        _submit(aliceKey, alice, openRound, away);
+
+        // Home is awarded the forfeit after the first round locked, before the second does.
+        vm.warp(T0 + 2 days);
+        _submit(bobKey, bob, openRound, home); // made knowing the outcome
+        uint64 announcedStart = uint64(block.timestamp) + 5 minutes;
+        vm.prank(operator);
+        registry.rescheduleGame(g[0], announcedStart);
+
+        vm.warp(announcedStart);
+        _record(_result(g[0], IResultsRegistry.GameStatus.Forfeit, IResultsRegistry.Side.Home, 0, 0));
+        _finalizeRound(lockedRound);
+        vm.warp(T0 + 4 days);
+        _finalizeRound(openRound);
+
+        (uint8 correct, uint8 counted) = predictions.scoreOf(lockedRound, alice);
+        assertEq(correct, 1);
+        assertEq(counted, 1);
+        (correct, counted) = predictions.scoreOf(openRound, bob);
+        assertEq(counted, 0);
+        (correct, counted) = predictions.scoreOf(openRound, alice);
+        assertEq(counted, 0);
+    }
+
     function test_CancelRound() public {
         bytes32 role = predictions.STEWARD_ROLE();
         vm.prank(operator);

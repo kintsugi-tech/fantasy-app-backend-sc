@@ -58,6 +58,12 @@ Key rules:
   result for that game, so the worker must not record a `void` for a game that is only postponed:
   past `correctableUntil` the replay could no longer be recorded. A replay that should count in a
   later round needs a new game id (a started game cannot be scheduled again).
+- **Forfeits decided before the start.** The operator moves the game's start to the announcement
+  (`rescheduleGame` to a few minutes from now), then the relayer records the `Forfeit` once that
+  start has passed. The game counts only in rounds locked before the announcement, whose picks were
+  all made without knowing it; in rounds still open it counts for no one. Do not move a round's
+  lock to keep the game. A round that locks between the announcement and the reschedule stays
+  exposed: cancel it before it settles.
 - `updateRoundLock` only moves a lock to at least `MIN_LOCK_NOTICE` (15 min) from now, so the
   submitter has time to land the picks already confirmed for the round. The trade-off: a game moved
   to start sooner than that cannot keep its round's lock before it, so it does not count there.
@@ -148,8 +154,37 @@ that round's late submissions: cancel it.
 - **Wrong result past its correction window, or a wrong correction:** before the round settles,
   the steward pauses Predictions (so nobody calls `finalizeRound` meanwhile) and cancels the
   round; the admin unpauses.
-- **Worker key compromised:** the steward pauses; the admin revokes the key, grants a new one and
-  unpauses. Rounds settled in the meantime are not affected; open ones may need cancelling.
+- **Deadline:** the round's `finalizableAt`, read on-chain, not the end of the correction
+  window. With equal windows (24 h / 24 h) a round can be finalized at the very moment its last
+  correction window closes, so there is no guaranteed time after it: pause Predictions or cancel
+  the round before `finalizableAt`. After it, cancelling works only while the round is not
+  finalized, and unless Predictions is paused anyone can finalize it first, a compromised or
+  revoked worker included.
+- **Worker key compromised:** the steward pauses **both** contracts. Pausing Predictions is what
+  stops `finalizeRound`: pausing only the registry, or revoking the worker's roles, does not. The
+  steward then cancels every unsettled round that has a result (or a reschedule) written by the
+  compromised key and not confirmed by an authentic attested result; the admin revokes the key,
+  grants a new one and unpauses. Rounds settled in the meantime are not affected and cannot be
+  repaired: revoking the key does not undo a finalized score.
+
+### Trust assumptions
+
+The worker keys (operator, relayer, submitter, custodial signing) are trusted for fixtures and
+results. The contracts check a result against the start time the operator stored, not against the
+real fixture, and do not verify attestations on-chain. So, if the worker is compromised, a result
+can be recorded before the real game is played. Likewise, every lock check uses the stored start
+times and lock: if they are false or stale, a pick made after the real game can score, or a game
+can be excluded from a round once its outcome is known. These are accepted residual risks:
+
+- Detection must not depend on the worker: fixtures and results are compared, from the on-chain
+  events, with the official calendar and with their LocalTruth attestation.
+- The worker keeps fixtures in sync with the official calendar. A change it missed emits no event,
+  so while a round's schedule is in doubt its submissions are suspended until it is reconciled.
+- The steward must act before each affected round's `finalizableAt`, after which anyone can settle
+  it. Within the correction window it can `correctResult` (e.g. to `Void`); otherwise it pauses
+  Predictions and cancels the round, which does not require knowing the real outcome.
+- Cancelling discards the round: its games cannot join another round, so a replacement needs new
+  game ids and fresh entries, and the round still counts towards the league's 64.
 
 ## Encodings shared with the app
 
