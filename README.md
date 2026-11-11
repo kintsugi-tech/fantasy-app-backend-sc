@@ -101,8 +101,21 @@ Key rules:
   the app's worker prepares the standings once the league's `endsAt` has passed and every round is
   settled. A proposal made too early (e.g. a wrong end date) would end the season: only the admin
   can undo it, `withdrawStandings(leagueId)`, and the league then takes rounds again.
-- Tie-break (off-chain, from on-chain data): points → rounds played → average lead time before the
-  lock (`sumLeadTime / roundsPlayed`) → verifiable draw.
+- Ranking policy (off-chain, from `leagueStatsOf`; reference `rankPlayers` in
+  `scripts/lib/m2.ts`):
+  - **Players:** every account with `roundsPlayed ≥ 1`, i.e. an entry in at least one finalized
+    round with at least one counted game. Zero points still ranks. An account with no entry, or
+    whose entries are only in cancelled rounds or in rounds where none of its games counted, is
+    not ranked. `totalPlayers` is the number of ranked accounts (the leaves of the tree).
+  - **Order:** points ↓ → rounds played ↓ → average lead time before the lock ↓
+    (`sumLeadTime / roundsPlayed`, compared exactly, not rounded; it is compared only between
+    players with the same rounds played, so this is the order of `sumLeadTime`). A round's lead
+    time is its `lockTime` when finalized minus the entry's `confirmedAt`.
+  - **Ties:** players equal on all three share the rank ("1224").
+  - **Draw:** only for players sharing a rank across a prize cutoff. Seed = hash of the block that
+    contains the league's `LeagueFinalized` event; the tied players are ordered by
+    `keccak256(abi.encodePacked(seed, account))` ascending, and the first take the remaining
+    places.
 
 ### Results and game formats
 

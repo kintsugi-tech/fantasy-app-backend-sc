@@ -160,17 +160,17 @@ export type PlayerStats = {
 }
 
 /**
- * Tie-break order: points, then rounds played, then average lead time before the lock
- * (earlier confirmation wins). Players still tied share the rank (standard competition
- * ranking, "1224"); the final verifiable draw for prizes happens off-chain on top of this.
+ * Tie-break order: points, then rounds played, then exact average lead time before the lock
+ * (earlier confirmation wins). The average is compared only between players with the same
+ * rounds played, so comparing `sumLeadTime` compares the exact averages (no rounding).
+ * Players still tied share the rank (standard competition ranking, "1224"); the verifiable
+ * draw for prizes happens off-chain on top of this.
  */
 export const rankPlayers = (players: readonly PlayerStats[]): (PlayerStats & { rank: number })[] => {
-  const avgLead = (p: PlayerStats) =>
-    p.roundsPlayed === 0 ? 0n : p.sumLeadTime / BigInt(p.roundsPlayed)
   const cmp = (a: PlayerStats, b: PlayerStats) =>
     b.points - a.points ||
     b.roundsPlayed - a.roundsPlayed ||
-    (avgLead(b) > avgLead(a) ? 1 : avgLead(b) < avgLead(a) ? -1 : 0)
+    (b.sumLeadTime > a.sumLeadTime ? 1 : b.sumLeadTime < a.sumLeadTime ? -1 : 0)
   const sorted = [...players].sort(cmp)
   return sorted.map((p, i) => {
     let rank = i + 1
