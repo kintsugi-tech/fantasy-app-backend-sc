@@ -259,6 +259,8 @@ contract Predictions is IPredictions, AccessControlDefaultAdminRules, Pausable, 
     ///         cannot keep its round's lock before it, so it does not count in that round.
     ///         As MIN_LOCK_NOTICE > MAX_CLOCK_SKEW, the lock also stays after every stored
     ///         `confirmedAt` (at most the block time + MAX_CLOCK_SKEW when it was accepted).
+    ///         Moving the lock earlier ignores games whose start has passed: their start never
+    ///         changes again and stays before the new lock, so they remain excluded.
     function updateRoundLock(bytes32 roundId, uint64 newLockTime) external onlyRole(OPERATOR_ROLE) whenNotPaused {
         Round storage r = _rounds[roundId];
         if (r.state != RoundState.Scheduled) revert RoundNotActive(roundId);
@@ -269,6 +271,8 @@ contract Predictions is IPredictions, AccessControlDefaultAdminRules, Pausable, 
         for (uint256 i = 0; i < gameIds.length; ++i) {
             // slither-disable-next-line unused-return (only the start time is needed here)
             (, , uint64 startTime, ) = registry.outcomeOf(gameIds[i]);
+            // Already excluded for good (block.timestamp < lockTime, so startTime < lockTime too).
+            if (newLockTime < r.lockTime && startTime <= block.timestamp) continue;
             if (startTime < newLockTime) revert LockAfterStart(gameIds[i]);
         }
 

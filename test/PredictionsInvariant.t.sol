@@ -122,16 +122,20 @@ contract PredictionsHandler is Test {
     }
 
     /// The operator moves the lock of an open round to any future time not after its games, within
-    /// MIN_LOCK_NOTICE (hence within MAX_CLOCK_SKEW) too: those moves must be rejected.
+    /// MIN_LOCK_NOTICE (hence within MAX_CLOCK_SKEW) too: those moves must be rejected. Games
+    /// already started are ignored when the lock moves earlier.
     function updateRoundLock(uint256 roundSeed, uint32 offset) external {
         bytes32 roundId = _round(roundSeed);
         Predictions.Round memory r = predictions.getRound(roundId);
         if (r.state != Predictions.RoundState.Scheduled || block.timestamp >= r.lockTime) return;
         uint64 newLock = uint64(block.timestamp) + 1 + uint64(offset % 1 days);
+        bool anyStarted = false;
         for (uint256 i = 0; i < GAMES; ++i) {
             uint64 startTime = registry.getGame(_games[roundId][i]).startTime;
-            if (startTime < newLock) newLock = startTime;
+            if (startTime <= block.timestamp) anyStarted = true;
+            else if (startTime < newLock) newLock = startTime;
         }
+        if (anyStarted && newLock >= r.lockTime) newLock = r.lockTime - 1;
         if (newLock <= block.timestamp || newLock <= r.opensAt) return;
         vm.prank(operator);
         predictions.updateRoundLock(roundId, newLock);

@@ -714,8 +714,10 @@ contract PredictionsTest is M2Base {
     }
 
     /// Corner case: a game brought forward, whose anticipation is undone only after the anticipated
-    /// time, stays out of its round, and the round's lock can no longer move before it.
+    /// time, stays out of its round. It does not block moving the lock earlier to keep another
+    /// game brought forward, but it still blocks moving the lock later.
     function test_AnticipationUndoneTooLateStaysExcluded() public {
+        _submit(aliceKey, alice, roundId, _picks(H, H, H));
         vm.prank(operator);
         registry.rescheduleGame(games[0], T0 + 2 hours);
 
@@ -724,14 +726,21 @@ contract PredictionsTest is M2Base {
         vm.expectRevert(abi.encodeWithSelector(ResultsRegistry.GameAlreadyStarted.selector, games[0], T0 + 2 hours));
         registry.rescheduleGame(games[0], lockTime);
 
-        vm.prank(operator);
+        // Game 1 is brought forward: the lock moves before it, ignoring game 0.
+        uint64 newLock = T0 + 5 hours;
+        vm.startPrank(operator);
+        registry.rescheduleGame(games[1], newLock);
+        predictions.updateRoundLock(roundId, newLock);
         vm.expectRevert(abi.encodeWithSelector(Predictions.LockAfterStart.selector, games[0]));
-        predictions.updateRoundLock(roundId, lockTime - 1 hours);
+        predictions.updateRoundLock(roundId, newLock + 1 hours);
+        vm.stopPrank();
+        assertEq(predictions.getRound(roundId).lockTime, newLock);
 
         vm.warp(lockTime + 3 hours);
         _settleGames(games, _bools(true, true, true));
         _finalizeRound(roundId);
         assertEq(predictions.getRound(roundId).outcomes & 3, 0, "game 0 does not count");
+        _assertScore(alice, 2, 2);
     }
 
     /// MAX_GAMES: a full 32-game round, the limit of the 2-bit packing in a uint64.

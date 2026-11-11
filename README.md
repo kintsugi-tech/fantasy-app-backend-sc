@@ -67,6 +67,8 @@ Key rules:
 - `updateRoundLock` only moves a lock to at least `MIN_LOCK_NOTICE` (15 min) from now, so the
   submitter has time to land the picks already confirmed for the round. The trade-off: a game moved
   to start sooner than that cannot keep its round's lock before it, so it does not count there.
+  Moving a lock earlier ignores the round's games whose start has already passed (they stay
+  excluded), so such a game does not block keeping another game brought forward.
 - Home/away teams are registered with the fixture; `recordResults` rejects a swapped file.
 - **Results can be corrected once, by the steward.** They come from an accredited institutional
   source (attested on LocalTruth), so there is no challenge period: the relayer writes the
