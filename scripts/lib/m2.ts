@@ -164,14 +164,15 @@ export type PlayerStats = {
  * (earlier confirmation wins). The average is compared only between players with the same
  * rounds played, so comparing `sumLeadTime` compares the exact averages (no rounding).
  * Players still tied share the rank (standard competition ranking, "1224"); the verifiable
- * draw for prizes happens off-chain on top of this.
+ * draw for prizes happens off-chain on top of this. Only players with at least one round played
+ * are ranked: others are dropped, so `totalPlayers` is the length of the result.
  */
 export const rankPlayers = (players: readonly PlayerStats[]): (PlayerStats & { rank: number })[] => {
   const cmp = (a: PlayerStats, b: PlayerStats) =>
     b.points - a.points ||
     b.roundsPlayed - a.roundsPlayed ||
     (b.sumLeadTime > a.sumLeadTime ? 1 : b.sumLeadTime < a.sumLeadTime ? -1 : 0)
-  const sorted = [...players].sort(cmp)
+  const sorted = players.filter((p) => p.roundsPlayed > 0).sort(cmp)
   return sorted.map((p, i) => {
     let rank = i + 1
     while (rank > 1 && cmp(sorted[rank - 2], p) === 0) rank--

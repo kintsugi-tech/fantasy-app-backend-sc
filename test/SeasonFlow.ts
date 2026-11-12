@@ -146,6 +146,26 @@ describe('M2 season flow', async () => {
     )
   })
 
+  it('ranks only accounts with at least one round played', () => {
+    const row = (n: number, points: number, roundsPlayed: number): m2.PlayerStats => ({
+      account: `0x${String(n).padStart(40, '0')}`,
+      points,
+      correct: points,
+      counted: roundsPlayed * 4,
+      roundsPlayed,
+      sumLeadTime: BigInt(roundsPlayed * 3600),
+    })
+    // A zero-score account that played is ranked; one with no round played is not.
+    const ranked = m2.rankPlayers([row(1, 0, 0), row(2, 0, 1), row(3, 2, 1)])
+    assert.deepEqual(
+      ranked.map((p) => [p.account, p.rank]),
+      [
+        [row(3, 2, 1).account, 1],
+        [row(2, 0, 1).account, 2],
+      ],
+    )
+  })
+
   it('runs a full league: fixtures, signed batch, results, scoring, standings', async () => {
     const c = await deployM2()
     const { leagueId, roundId, games, gameIds, lockTime, now } = await setupRound(c, 'mvl-2026-27', 4)
