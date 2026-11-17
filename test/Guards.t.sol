@@ -63,6 +63,35 @@ contract GuardsTest is M2Base {
         predictions.createLeague(bytes32(0), bytes32(0));
     }
 
+    function test_CreateLeagueRejectsZeroMetadata() public {
+        vm.prank(operator);
+        vm.expectRevert(Predictions.InvalidMetadata.selector);
+        predictions.createLeague(LEAGUE, bytes32(0));
+    }
+
+    /// The steward's discretionary actions need a public reason.
+    function test_StewardActionsNeedAReason() public {
+        _createLeague();
+        uint64 start = T0 + 1 days;
+        bytes32[] memory games = _registerGames(2, start);
+        bytes32 roundId = _scheduleRound(1, games, T0, start);
+
+        vm.prank(steward);
+        vm.expectRevert(Predictions.EmptyReason.selector);
+        predictions.cancelRound(roundId, "");
+
+        vm.warp(start + POSTPONE + 1);
+        vm.prank(steward);
+        vm.expectRevert(ResultsRegistry.EmptyReason.selector);
+        registry.voidGame(games[0], "");
+
+        _record(_final(games[1], true));
+        IResultsRegistry.ResultInput memory right = _final(games[1], false);
+        vm.prank(steward);
+        vm.expectRevert(ResultsRegistry.EmptyReason.selector);
+        registry.correctResult(right, "");
+    }
+
     function test_LeagueRoundLimit() public {
         _createLeague();
         uint64 lock = T0 + 1 days;
@@ -106,11 +135,15 @@ contract GuardsTest is M2Base {
         bytes32 unknown = keccak256("nope");
         vm.startPrank(steward);
         vm.expectRevert(Predictions.InvalidStandings.selector);
-        predictions.proposeStandings(LEAGUE, bytes32(0), 1, bytes32(0), "");
+        predictions.proposeStandings(LEAGUE, bytes32(0), 1, keccak256("report"), "ipfs://report");
         vm.expectRevert(Predictions.InvalidStandings.selector);
-        predictions.proposeStandings(LEAGUE, keccak256("root"), 0, bytes32(0), "");
+        predictions.proposeStandings(LEAGUE, keccak256("root"), 0, keccak256("report"), "ipfs://report");
+        vm.expectRevert(Predictions.InvalidStandings.selector);
+        predictions.proposeStandings(LEAGUE, keccak256("root"), 1, bytes32(0), "ipfs://report");
+        vm.expectRevert(Predictions.InvalidStandings.selector);
+        predictions.proposeStandings(LEAGUE, keccak256("root"), 1, keccak256("report"), "");
         vm.expectRevert(abi.encodeWithSelector(Predictions.LeagueNotActive.selector, unknown));
-        predictions.proposeStandings(unknown, keccak256("root"), 1, bytes32(0), "");
+        predictions.proposeStandings(unknown, keccak256("root"), 1, keccak256("report"), "ipfs://report");
         vm.expectRevert(abi.encodeWithSelector(Predictions.LeagueNotActive.selector, unknown));
         predictions.finalizeLeague(unknown);
         vm.stopPrank();
@@ -201,7 +234,7 @@ contract GuardsTest is M2Base {
 
         vm.startPrank(steward);
         vm.expectRevert(Pausable.EnforcedPause.selector);
-        predictions.proposeStandings(LEAGUE, keccak256("root"), 1, bytes32(0), "");
+        predictions.proposeStandings(LEAGUE, keccak256("root"), 1, keccak256("report"), "ipfs://report");
         vm.expectRevert(Pausable.EnforcedPause.selector);
         predictions.finalizeLeague(LEAGUE);
         vm.stopPrank();

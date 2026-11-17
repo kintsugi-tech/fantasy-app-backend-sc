@@ -58,9 +58,17 @@ Key rules:
   result for that game, so the worker must not record a `void` for a game that is only postponed:
   past `correctableUntil` the replay could no longer be recorded. A replay that should count in a
   later round needs a new game id (a started game cannot be scheduled again).
+- **Forfeits decided before the start.** The operator moves the game's start to the announcement
+  (`rescheduleGame` to a few minutes from now), then the relayer records the `Forfeit` once that
+  start has passed. The game counts only in rounds locked before the announcement, whose picks were
+  all made without knowing it; in rounds still open it counts for no one. Do not move a round's
+  lock to keep the game. A round that locks between the announcement and the reschedule stays
+  exposed: cancel it before it settles.
 - `updateRoundLock` only moves a lock to at least `MIN_LOCK_NOTICE` (15 min) from now, so the
   submitter has time to land the picks already confirmed for the round. The trade-off: a game moved
   to start sooner than that cannot keep its round's lock before it, so it does not count there.
+  Moving a lock earlier ignores the round's games whose start has already passed (they stay
+  excluded), so such a game does not block keeping another game brought forward.
 - Home/away teams are registered with the fixture; `recordResults` rejects a swapped file.
 - **Results can be corrected once, by the steward.** They come from an accredited institutional
   source (attested on LocalTruth), so there is no challenge period: the relayer writes the
@@ -71,7 +79,9 @@ Key rules:
     its result; the deadline is fixed when the result is written, so a later change of the window
     never reopens it;
   - same checks as `recordResults`; the source may be the same attested file (parser bug) or a
-    new one; `ResultCorrected` carries both the result and the steward's reason;
+    new one; it must change the result or its `sourceHash`, otherwise it reverts
+    (`UnchangedResult`) and the correction is not used up; `ResultCorrected` carries both the
+    result and the steward's reason;
   - it also turns a void (by the relayer or `voidGame`) into a result;
   - it moves `recordedAt` to now, so every round of the game gives the corrected result a full
     `finalizationDelay`.
@@ -84,8 +94,11 @@ Key rules:
 
 - A game with no result `postponeWindow` (7 days, admin-settable between 1 and 30 days) after its
   start can be voided by the steward, so a round is never blocked by a game that is never played nor
-  uploaded. As a started game never moves, that date is fixed once the start has passed. It is a
-  minimum, not a deadline: until the steward voids it, a late replay is still recorded and counts.
+  uploaded. The start is fixed once it has passed, but the void date uses the current
+  `postponeWindow`: an admin change of the window moves it for every game still without a result
+  (later if increased, earlier if decreased). The steward can void only when
+  `block.timestamp > startTime + postponeWindow`. It is a minimum, not a deadline: until the
+  steward voids it, a late replay is still recorded and counts.
 - **Final standings in two steps.** The steward proposes the root once every round of the league is
   finalized or cancelled (at least one finalized); a new proposal replaces it and restarts the 48 h
   review. During the review `checkStanding` verifies any row against the proposed root and against
@@ -95,8 +108,21 @@ Key rules:
   the app's worker prepares the standings once the league's `endsAt` has passed and every round is
   settled. A proposal made too early (e.g. a wrong end date) would end the season: only the admin
   can undo it, `withdrawStandings(leagueId)`, and the league then takes rounds again.
-- Tie-break (off-chain, from on-chain data): points → rounds played → average lead time before the
-  lock (`sumLeadTime / roundsPlayed`) → verifiable draw.
+- Ranking policy (off-chain, from `leagueStatsOf`; reference `rankPlayers` in
+  `scripts/lib/m2.ts`):
+  - **Players:** every account with `roundsPlayed ≥ 1`, i.e. an entry in at least one finalized
+    round with at least one counted game. Zero points still ranks. An account with no entry, or
+    whose entries are only in cancelled rounds or in rounds where none of its games counted, is
+    not ranked. `totalPlayers` is the number of ranked accounts (the leaves of the tree).
+  - **Order:** points ↓ → rounds played ↓ → average lead time before the lock ↓
+    (`sumLeadTime / roundsPlayed`, compared exactly, not rounded; it is compared only between
+    players with the same rounds played, so this is the order of `sumLeadTime`). A round's lead
+    time is its `lockTime` when finalized minus the entry's `confirmedAt`.
+  - **Ties:** players equal on all three share the rank ("1224").
+  - **Draw:** only for players sharing a rank across a prize cutoff. Seed = hash of the block that
+    contains the league's `LeagueFinalized` event; the tied players are ordered by
+    `keccak256(abi.encodePacked(seed, account))` ascending, and the first take the remaining
+    places.
 
 ### Results and game formats
 
@@ -148,8 +174,37 @@ that round's late submissions: cancel it.
 - **Wrong result past its correction window, or a wrong correction:** before the round settles,
   the steward pauses Predictions (so nobody calls `finalizeRound` meanwhile) and cancels the
   round; the admin unpauses.
-- **Worker key compromised:** the steward pauses; the admin revokes the key, grants a new one and
-  unpauses. Rounds settled in the meantime are not affected; open ones may need cancelling.
+- **Deadline:** the round's `finalizableAt`, read on-chain, not the end of the correction
+  window. With equal windows (24 h / 24 h) a round can be finalized at the very moment its last
+  correction window closes, so there is no guaranteed time after it: pause Predictions or cancel
+  the round before `finalizableAt`. After it, cancelling works only while the round is not
+  finalized, and unless Predictions is paused anyone can finalize it first, a compromised or
+  revoked worker included.
+- **Worker key compromised:** the steward pauses **both** contracts. Pausing Predictions is what
+  stops `finalizeRound`: pausing only the registry, or revoking the worker's roles, does not. The
+  steward then cancels every unsettled round that has a result (or a reschedule) written by the
+  compromised key and not confirmed by an authentic attested result; the admin revokes the key,
+  grants a new one and unpauses. Rounds settled in the meantime are not affected and cannot be
+  repaired: revoking the key does not undo a finalized score.
+
+### Trust assumptions
+
+The worker keys (operator, relayer, submitter, custodial signing) are trusted for fixtures and
+results. The contracts check a result against the start time the operator stored, not against the
+real fixture, and do not verify attestations on-chain. So, if the worker is compromised, a result
+can be recorded before the real game is played. Likewise, every lock check uses the stored start
+times and lock: if they are false or stale, a pick made after the real game can score, or a game
+can be excluded from a round once its outcome is known. These are accepted residual risks:
+
+- Detection must not depend on the worker: fixtures and results are compared, from the on-chain
+  events, with the official calendar and with their LocalTruth attestation.
+- The worker keeps fixtures in sync with the official calendar. A change it missed emits no event,
+  so while a round's schedule is in doubt its submissions are suspended until it is reconciled.
+- The steward must act before each affected round's `finalizableAt`, after which anyone can settle
+  it. Within the correction window it can `correctResult` (e.g. to `Void`); otherwise it pauses
+  Predictions and cancels the round, which does not require knowing the real outcome.
+- Cancelling discards the round: its games cannot join another round, so a replacement needs new
+  game ids and fresh entries, and the round still counts towards the league's 64.
 
 ## Encodings shared with the app
 

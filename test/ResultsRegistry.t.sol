@@ -633,6 +633,46 @@ contract ResultsRegistryTest is M2Base {
         vm.stopPrank();
     }
 
+    /// A correction identical to the stored result (same source too) reverts and does not use up
+    /// the correction: a changed result can still be written within the original window.
+    function test_UnchangedCorrectionReverts() public {
+        vm.warp(startTime + 2 hours);
+        IResultsRegistry.ResultInput memory recorded = _final(game, true);
+        _record(recorded);
+        uint64 deadline = registry.correctableUntil(game);
+
+        vm.warp(startTime + 3 hours);
+        vm.prank(steward);
+        vm.expectRevert(abi.encodeWithSelector(ResultsRegistry.UnchangedResult.selector, game));
+        registry.correctResult(recorded, "same result");
+        IResultsRegistry.Game memory g = registry.getGame(game);
+        assertFalse(g.corrected);
+        assertEq(g.recordedAt, startTime + 2 hours);
+        assertEq(registry.correctableUntil(game), deadline);
+
+        IResultsRegistry.ResultInput memory right = _final(game, false);
+        vm.prank(steward);
+        registry.correctResult(right, "away won");
+        assertEq(uint8(registry.getGame(game).winner), uint8(IResultsRegistry.Side.Away));
+    }
+
+    /// A correction of the source alone (same result, another attested file) is accepted and uses
+    /// up the correction.
+    function test_CorrectTheSourceOnly() public {
+        vm.warp(startTime + 2 hours);
+        IResultsRegistry.ResultInput memory recorded = _final(game, true);
+        _record(recorded);
+
+        IResultsRegistry.ResultInput memory resourced = recorded;
+        resourced.sourceHash = sha256("the right file");
+        vm.prank(steward);
+        registry.correctResult(resourced, "linked to the wrong file");
+        IResultsRegistry.Game memory g = registry.getGame(game);
+        assertEq(g.sourceHash, sha256("the right file"));
+        assertEq(uint8(g.winner), uint8(IResultsRegistry.Side.Home));
+        assertTrue(g.corrected);
+    }
+
     function test_CorrectRunsTheRecordChecks() public {
         vm.warp(startTime + 2 hours);
         _record(_final(game, true));
